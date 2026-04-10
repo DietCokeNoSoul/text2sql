@@ -83,27 +83,46 @@ class CommonNodes:
             节点函数，获取相关表的结构信息
         """
         def get_schema(state: Dict[str, Any]) -> Dict[str, Any]:
-            """执行架构检索操作。"""
+            """执行架构检索操作 - 直接调用工具，避免 LLM 超时。"""
             try:
                 logger.info("Executing get schema node (common)")
                 
+                # 获取表列表
+                tables = state.get("tables", [])
+                if not tables:
+                    logger.warning("No tables found in state, fetching all tables")
+                    # 如果没有表列表，先获取所有表
+                    list_tool = self.tool_manager.get_list_tables_tool()
+                    tables_str = list_tool.invoke({})
+                    tables = [t.strip() for t in tables_str.split(',')]
+                
+                # 直接调用 schema 工具获取所有相关表的 schema
                 schema_tool = self.tool_manager.get_schema_tool()
-                llm_with_tools = self.llm.bind_tools([schema_tool], tool_choice="auto")
                 
+                # 获取所有表的 schema（对于复杂查询很重要）
+                table_names = ", ".join(tables)  # 获取所有表的 schema
+                
+                logger.info(f"Fetching schema for tables: {table_names}")
+                schema = schema_tool.invoke({"table_names": table_names})
+                
+                logger.info(f"Schema retrieval completed ({len(schema)} characters)")
+                
+                # 将 schema 添加到消息和状态
                 messages = state.get("messages", [])
-                response = llm_with_tools.invoke(messages)
+                schema_message = AIMessage(content=f"Database schema:\n{schema}")
+                messages.append(schema_message)
                 
-                logger.info(f"Schema retrieval completed")
-                
-                messages.append(response)
-                return {"messages": messages}
+                return {
+                    "messages": messages,
+                    "table_schema": schema
+                }
                 
             except Exception as e:
                 logger.error(f"Error in get schema node: {e}")
-                error_message = AIMessage(f"Error retrieving schema: {str(e)}")
+                error_message = AIMessage(content=f"Error retrieving schema: {str(e)}")
                 messages = state.get("messages", [])
                 messages.append(error_message)
-                return {"messages": messages}
+                return {"messages": messages, "table_schema": ""}
         
         return get_schema
     

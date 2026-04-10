@@ -1,6 +1,7 @@
 """SQL Agent 的工具管理。
 
 本模块提供 SQL 数据库工具和代理使用的其他实用程序的管理。
+支持 Schema 缓存包装器以减少重复数据库调用。
 """
 
 import logging
@@ -16,6 +17,51 @@ from .types import ToolNotFoundError
 
 
 logger = logging.getLogger(__name__)
+
+
+class CachedSchemaTool:
+    """Schema 工具的缓存包装器。
+    
+    拦截 sql_db_schema 工具调用，优先从 SQLDatabaseManager 的缓存中获取，
+    避免每次都访问数据库。
+    """
+    
+    def __init__(self, original_tool: BaseTool, db_manager: SQLDatabaseManager):
+        self._original = original_tool
+        self._db_manager = db_manager
+        self.name = original_tool.name
+        self.description = original_tool.description
+        self.args_schema = original_tool.args_schema
+    
+    def invoke(self, input_data, config=None, **kwargs):
+        """通过缓存层调用 schema 工具。"""
+        # 提取表名参数
+        if isinstance(input_data, dict):
+            table_names_str = input_data.get("table_names", "")
+        else:
+            table_names_str = str(input_data)
+        
+        if table_names_str and self._db_manager.schema_cache:
+            table_list = [t.strip() for t in table_names_str.split(",")]
+            cached = self._db_manager.schema_cache.get_schema(table_list)
+            if cached is not None:
+                logger.debug(f"[CachedSchemaTool] Cache HIT for: {table_names_str}")
+                return cached
+        
+        # 缓存未命中，调用原始工具
+        result = self._original.invoke(input_data, config=config, **kwargs)
+        
+        # 写入缓存
+        if table_names_str and self._db_manager.schema_cache:
+            table_list = [t.strip() for t in table_names_str.split(",")]
+            self._db_manager.schema_cache.set_schema(table_list, result)
+            logger.debug(f"[CachedSchemaTool] Cached schema for: {table_names_str}")
+        
+        return result
+    
+    def __getattr__(self, name):
+        """将其他属性代理到原始工具。"""
+        return getattr(self._original, name)
 
 
 class SQLToolManager:
@@ -100,8 +146,11 @@ class SQLToolManager:
         return tool
     
     def get_schema_tool(self) -> BaseTool:
-        """获取模式检索工具。"""
-        return self.get_required_tool("sql_db_schema")
+        """获取模式检索工具（带缓存包装）。"""
+        original = self.get_required_tool("sql_db_schema")
+        if self.db_manager.schema_cache:
+            return CachedSchemaTool(original, self.db_manager)
+        return original
     
     def get_query_tool(self) -> BaseTool:
         """获取查询执行工具。"""

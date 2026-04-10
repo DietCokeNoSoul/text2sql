@@ -63,12 +63,21 @@ class LoggingConfig:
 
 
 @dataclass
+class OutputConfig:
+    """输出路径配置。"""
+    
+    report_dir: str = "report"    # 分析报告保存目录（相对项目根目录或绝对路径）
+    chart_dir: str = "report/charts"  # 图表文件保存目录
+
+
+@dataclass
 class AgentConfig:
     """SQL Agent 的主配置类。"""
     
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    output: OutputConfig = field(default_factory=OutputConfig)
     
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "AgentConfig":
@@ -114,10 +123,17 @@ class AgentConfig:
             backup_count=int(os.getenv("LOG_BACKUP_COUNT", "5"))
         )
         
+        # 输出路径配置
+        output_config = OutputConfig(
+            report_dir=os.getenv("REPORT_DIR", "report"),
+            chart_dir=os.getenv("CHART_DIR", "report/charts"),
+        )
+        
         return cls(
             database=db_config,
             llm=llm_config,
-            logging=logging_config
+            logging=logging_config,
+            output=output_config,
         )
     
     def validate(self) -> None:

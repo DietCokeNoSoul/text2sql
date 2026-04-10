@@ -14,7 +14,7 @@ from langchain_community.chat_models import ChatTongyi
 from langgraph.checkpoint.memory import InMemorySaver
 
 from .config import get_config
-from .graph_builder import create_sql_agent_graph
+from .skill_graph_builder import create_skill_based_graph as create_sql_agent_graph
 from .logging_config import setup_logging
 
 

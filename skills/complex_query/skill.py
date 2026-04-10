@@ -14,9 +14,8 @@ from typing import Any, Dict, List, Literal
 
 from langchain.chat_models import BaseChatModel
 from langchain.messages import AIMessage, HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, END, START
+from langgraph.graph import StateGraph, END, START, add_messages
 from langgraph.types import Send
-from langgraph.graph.message import add_messages
 
 from agent.tools import SQLToolManager
 from agent.database import SQLDatabaseManager
@@ -126,22 +125,47 @@ class ComplexQuerySkill(BaseSkill):
             return {}
         
         # Create planning prompt
-        system_prompt = f"""You are a SQL query planner. Given a complex question, break it down into multiple independent sub-queries.
+        system_prompt = f"""You are a SQL query planner for MySQL database. Given a complex question, break it down into multiple independent sub-queries.
 
 Available tables and schema:
 {table_schema}
 
-Rules:
-1. Each step should be a simple, self-contained query
-2. Steps can be executed in parallel if they don't depend on each other
-3. Use clear, descriptive step names
-4. Keep queries focused and specific
+**CRITICAL: How to use placeholders for dependent steps**:
+- Use `{{step_N_results}}` to reference results from step N
+- This placeholder will be replaced with VALUES like `(1, 2, 3)` - a list of IDs
+- Use it ONLY with IN operator: `WHERE column IN {{step_N_results}}`
+- DO NOT treat it as a table or subquery
 
-Output format (JSON):
+**WRONG usage** (will cause syntax errors):
+❌ `SELECT id FROM ({{step_1_results}}) AS t`
+❌ `JOIN ({{step_1_results}}) t ON ...`
+❌ `WHERE id = {{step_1_results}}`
+
+**CORRECT usage**:
+✅ `WHERE type_id IN {{step_1_results}}`
+✅ `WHERE shop_id IN {{step_1_results}}`
+✅ `WHERE id IN {{step_1_results}} AND status = 'active'`
+
+**MySQL Compatibility Rules**:
+1. DO NOT use "LIMIT" inside subqueries with IN/ALL/ANY/SOME
+2. Keep queries simple and direct
+3. Avoid deeply nested subqueries
+
+**Output format (JSON)**:
 {{
     "steps": [
-        {{"step_id": 1, "description": "...", "query": "...", "depends_on": []}},
-        {{"step_id": 2, "description": "...", "query": "...", "depends_on": [1]}}
+        {{
+            "step_id": 1, 
+            "description": "Get top 3 shop type IDs", 
+            "query": "SELECT id, name FROM tb_shop_type ORDER BY score DESC LIMIT 3",
+            "depends_on": []
+        }},
+        {{
+            "step_id": 2, 
+            "description": "Count shops for each type", 
+            "query": "SELECT type_id, COUNT(*) FROM tb_shop WHERE type_id IN {{step_1_results}} GROUP BY type_id",
+            "depends_on": [1]
+        }}
     ]
 }}
 
@@ -204,11 +228,12 @@ If the question is simple (single table, single query), output:
     
     def _execute_step_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute query steps in parallel using Send API
+        Execute query steps with dependency resolution
         
-        This node will be called once per step via Send.
+        This node executes steps that have all dependencies satisfied,
+        replacing placeholders with actual results from previous steps.
         """
-        logger.info("[ComplexQuery] Executing query steps in parallel")
+        logger.info("[ComplexQuery] Executing query steps with dependency resolution")
         
         query_plan = state.get("query_plan", [])
         step_results = state.get("step_results", {})
@@ -236,8 +261,11 @@ If the question is simple (single table, single query), output:
             step_id = step["step_id"]
             query = step["query"]
             
+            # Replace placeholders with actual results from dependencies
+            query = self._resolve_query_placeholders(query, step.get("depends_on", []), step_results)
+            
             try:
-                # Execute query using common node
+                # Execute query using tool
                 query_tool = self.tool_manager.get_query_tool()
                 result = query_tool.invoke({"query": query})
                 
@@ -245,6 +273,7 @@ If the question is simple (single table, single query), output:
                     "step_id": step_id,
                     "description": step["description"],
                     "query": query,
+                    "original_query": step["query"],
                     "result": result,
                     "success": True
                 }
@@ -256,11 +285,78 @@ If the question is simple (single table, single query), output:
                     "step_id": step_id,
                     "description": step["description"],
                     "query": query,
+                    "original_query": step["query"],
                     "error": str(e),
                     "success": False
                 }
         
         return {"step_results": step_results}
+    
+    def _resolve_query_placeholders(self, query: str, depends_on: List[int], step_results: Dict) -> str:
+        """
+        Replace placeholders like {step_N_results} with actual values
+        
+        Args:
+            query: SQL query with placeholders
+            depends_on: List of step IDs this query depends on
+            step_results: Dictionary of completed step results
+            
+        Returns:
+            Query with placeholders replaced by actual values
+        """
+        import re
+        import ast
+        
+        for dep_id in depends_on:
+            placeholder = f"{{step_{dep_id}_results}}"
+            
+            if placeholder in query:
+                # Get the result from the dependency step
+                dep_step = step_results.get(dep_id, {})
+                dep_result = dep_step.get("result", [])
+                
+                logger.info(f"[ComplexQuery] Resolving placeholder for step {dep_id}")
+                logger.info(f"[ComplexQuery] Raw result type: {type(dep_result)}, value: {dep_result}")
+                
+                # If result is a string, try to parse it as a Python literal
+                if isinstance(dep_result, str):
+                    try:
+                        dep_result = ast.literal_eval(dep_result)
+                        logger.info(f"[ComplexQuery] Parsed string to: {type(dep_result)}, value: {dep_result}")
+                    except (ValueError, SyntaxError) as e:
+                        logger.error(f"[ComplexQuery] Failed to parse result string: {e}")
+                        query = query.replace(placeholder, "(NULL)")
+                        continue
+                
+                if dep_result is not None and dep_result != []:
+                    # Extract IDs from tuples (assuming first element is ID)
+                    if isinstance(dep_result, list):
+                        if len(dep_result) > 0:
+                            if isinstance(dep_result[0], tuple):
+                                # Extract first element from each tuple
+                                ids = [str(row[0]) for row in dep_result]
+                                logger.info(f"[ComplexQuery] Extracted IDs from tuples: {ids}")
+                            else:
+                                # Direct list of values
+                                ids = [str(val) for val in dep_result]
+                                logger.info(f"[ComplexQuery] Direct list of IDs: {ids}")
+                            
+                            # Replace placeholder with comma-separated IDs in parentheses
+                            id_list = "(" + ", ".join(ids) + ")"
+                            query = query.replace(placeholder, id_list)
+                            logger.info(f"[ComplexQuery] Replaced {placeholder} with: {id_list}")
+                        else:
+                            logger.warning(f"[ComplexQuery] Empty result list for step {dep_id}")
+                            query = query.replace(placeholder, "(NULL)")
+                    else:
+                        logger.warning(f"[ComplexQuery] Result is not a list for step {dep_id}, type: {type(dep_result)}")
+                        query = query.replace(placeholder, "(NULL)")
+                else:
+                    logger.warning(f"[ComplexQuery] No result found for step {dep_id}")
+                    query = query.replace(placeholder, "(NULL)")
+        
+        logger.info(f"[ComplexQuery] Final query: {query}")
+        return query
     
     def _aggregate_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Collect and format all step results"""
