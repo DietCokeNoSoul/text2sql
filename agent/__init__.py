@@ -13,11 +13,15 @@ from .skill_graph_builder import (
 )
 
 # Core components
-from .config import get_config, AgentConfig, SecurityConfig
+from .config import get_config, AgentConfig, SecurityConfig, RetrievalConfig
 from .database import SQLDatabaseManager
 from .tools import SQLToolManager
 from .security import SQLSecurityGuard, ValidationResult
 from .types import SecurityViolationError
+from .retrieval import DualTowerRetriever
+from .schema_graph import SchemaGraph
+from .column_index import ColumnIndex
+from .session_plan import SessionPlanManager
 
 # Legacy graph (backward compatibility) - lazy loading to avoid initialization on import
 _legacy_graph = None
@@ -55,6 +59,7 @@ __all__ = [
     "get_config",
     "AgentConfig",
     "SecurityConfig",
+    "RetrievalConfig",
     "SQLDatabaseManager",
     "SQLToolManager",
     
@@ -62,4 +67,12 @@ __all__ = [
     "SQLSecurityGuard",
     "ValidationResult",
     "SecurityViolationError",
+
+    # Dual-Tower Retrieval
+    "DualTowerRetriever",
+    "SchemaGraph",
+    "ColumnIndex",
+
+    # Session Plan Tracking
+    "SessionPlanManager",
 ]

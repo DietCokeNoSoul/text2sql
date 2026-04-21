@@ -135,6 +135,31 @@ class SecurityConfig:
 
 
 @dataclass
+class RetrievalConfig:
+    """双塔检索配置（Milvus + NetworkX Steiner Tree）。"""
+
+    enabled: bool = True
+    milvus_host: str = "127.0.0.1"
+    milvus_port: int = 19530
+    top_k_columns: int = 15          # 向量检索返回的列数
+    max_candidate_tables: int = 6    # 最多保留的候选表数
+    score_threshold: float = 0.25    # 最低相似度阈值（cosine）
+    force_rebuild: bool = False       # 每次启动强制重建索引
+
+    @classmethod
+    def from_env(cls) -> "RetrievalConfig":
+        return cls(
+            enabled=os.getenv("RETRIEVAL_ENABLED", "true").lower() == "true",
+            milvus_host=os.getenv("MILVUS_HOST", "127.0.0.1"),
+            milvus_port=int(os.getenv("MILVUS_PORT", "19530")),
+            top_k_columns=int(os.getenv("RETRIEVAL_TOP_K", "15")),
+            max_candidate_tables=int(os.getenv("RETRIEVAL_MAX_TABLES", "6")),
+            score_threshold=float(os.getenv("RETRIEVAL_THRESHOLD", "0.25")),
+            force_rebuild=os.getenv("RETRIEVAL_FORCE_REBUILD", "false").lower() == "true",
+        )
+
+
+@dataclass
 class AgentConfig:
     """SQL Agent 的主配置类。"""
     
@@ -143,6 +168,7 @@ class AgentConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "AgentConfig":
@@ -203,6 +229,7 @@ class AgentConfig:
             logging=logging_config,
             output=output_config,
             security=security_config,
+            retrieval=RetrievalConfig.from_env(),
         )
     
     def validate(self) -> None:

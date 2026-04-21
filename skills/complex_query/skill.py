@@ -3,14 +3,15 @@ Complex Query Skill Implementation
 
 Plan-Execute pattern:
 1. list_tables → get_schema (reuse common nodes)
-2. plan → analyze question, generate multi-step query plan
-3. execute_step → parallel execution using Send API
-4. aggregate → collect all step results
-5. judge → check if all steps completed, loop if needed
+2. dual_tower_retrieve → semantic column search + Steiner Tree JOIN planning (optional)
+3. plan → analyze question, generate multi-step query plan
+4. execute_step → parallel execution using Send API
+5. aggregate → collect all step results
+6. judge → check if all steps completed, loop if needed
 """
 
 import logging
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from langchain.chat_models import BaseChatModel
 from langchain.messages import AIMessage, HumanMessage, SystemMessage
@@ -30,13 +31,25 @@ class ComplexQuerySkill(BaseSkill):
     Complex Query Skill - Plan-Execute pattern with parallel execution
     
     Flow:
-        list_tables → get_schema → plan → execute_steps (parallel) → aggregate → judge
+        list_tables → get_schema → [dual_tower_retrieve] → plan
+        → execute_steps (parallel) → aggregate → judge
         
     Uses Send API for parallel execution of sub-queries.
+    Optionally uses DualTowerRetriever for schema pruning before planning.
+    Optionally uses SessionPlanManager for session-level task tracking.
     """
     
-    def __init__(self, llm: BaseChatModel, tool_manager: SQLToolManager, db_manager: SQLDatabaseManager):
+    def __init__(
+        self,
+        llm: BaseChatModel,
+        tool_manager: SQLToolManager,
+        db_manager: SQLDatabaseManager,
+        retriever: Optional[object] = None,   # DualTowerRetriever instance
+        plan_manager: Optional[object] = None, # SessionPlanManager instance
+    ):
         self.db_manager = db_manager
+        self._retriever = retriever
+        self._plan_manager = plan_manager
         self.simple_query_tool = None  # Will be set by main graph if needed
         
         super().__init__(
@@ -61,6 +74,10 @@ class ComplexQuerySkill(BaseSkill):
             query_plan: list  # List of step dicts
             step_results: dict  # Dict of step_id -> result
             plan_completed: bool
+            # Retrieval stats (injected by dual_tower_retrieve node)
+            retrieval_stats: dict
+            # Session plan tracking
+            task_id: str
         
         # Use custom state
         graph = StateGraph(ComplexQueryGraphState)
@@ -73,10 +90,16 @@ class ComplexQuerySkill(BaseSkill):
         graph.add_node("aggregate", self._aggregate_node)
         graph.add_node("judge", self._judge_node)
         
-        # Build flow
+        # Build flow — insert retrieval node if retriever is configured
         graph.add_edge(START, "list_tables")
         graph.add_edge("list_tables", "get_schema")
-        graph.add_edge("get_schema", "plan")
+
+        if self._retriever is not None:
+            graph.add_node("dual_tower_retrieve", self._dual_tower_retrieve_node)
+            graph.add_edge("get_schema", "dual_tower_retrieve")
+            graph.add_edge("dual_tower_retrieve", "plan")
+        else:
+            graph.add_edge("get_schema", "plan")
         
         # Conditional: plan decides whether to execute steps or end
         graph.add_conditional_edges(
@@ -104,27 +127,69 @@ class ComplexQuerySkill(BaseSkill):
         
         return graph.compile()
     
+    def _dual_tower_retrieve_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """双塔检索节点：用 Milvus + Steiner Tree 剪枝 schema。"""
+        messages = state.get("messages", [])
+        user_question = messages[0].content if messages else ""
+        full_schema = state.get("table_schema", "")
+
+        logger.info(f"[DualTower] Retrieving schema for: {user_question[:80]}")
+
+        try:
+            result = self._retriever.retrieve(user_question)
+
+            # Replace full schema with pruned schema
+            stats = {
+                "full_chars": result.full_schema_chars,
+                "pruned_chars": result.pruned_schema_chars,
+                "saved_chars": result.char_saved,
+                "saved_tokens_est": result.estimated_token_saved,
+                "reduction_pct": round(result.reduction_pct, 1),
+                "join_path_tables": result.join_path_tables,
+                "retrieval_ms": round(result.retrieval_ms, 1),
+            }
+            logger.info(result.summary())
+
+            return {
+                "table_schema": result.pruned_schema,
+                "retrieval_stats": stats,
+            }
+
+        except Exception as e:
+            logger.warning(f"[DualTower] Retrieval node failed: {e}, using full schema")
+            return {
+                "table_schema": full_schema,
+                "retrieval_stats": {"error": str(e)},
+            }
+
     def _plan_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyze the question and generate a multi-step query plan
-        
-        Each step should be a sub-query that can be executed independently.
+        Analyze the question and generate a multi-step query plan.
+        Creates / updates the session plan file for task tracking.
         """
         logger.info("[ComplexQuery] Planning multi-step query")
         
         messages = state.get("messages", [])
         table_schema = state.get("table_schema", "")
         query_plan = state.get("query_plan", [])
+        task_id = state.get("task_id", "")
         
-        # Get the original question
         user_question = messages[0].content if messages else ""
         
-        # Check if we already have a plan
         if query_plan:
             logger.info("[ComplexQuery] Plan already exists, skipping planning")
             return {}
         
+        # ── Session plan: inject prior progress if resuming ────────────────
+        plan_context = ""
+        if self._plan_manager and task_id:
+            plan_context = self._plan_manager.format_for_llm(task_id)
+            if plan_context:
+                logger.info(f"[SessionPlan] Injecting plan progress into LLM context")
+
         # Create planning prompt
+        plan_context_section = f"\n\n## 当前会话进度（请参考，避免重复已完成步骤）\n{plan_context}" if plan_context else ""
+
         system_prompt = f"""You are a SQL query planner for MySQL database. Given a complex question, break it down into multiple independent sub-queries.
 
 Available tables and schema:
@@ -170,7 +235,7 @@ Available tables and schema:
 }}
 
 If the question is simple (single table, single query), output:
-{{"simple": true, "reason": "..."}}
+{{"simple": true, "reason": "..."}}{plan_context_section}
 """
         
         plan_messages = [
@@ -180,13 +245,11 @@ If the question is simple (single table, single query), output:
         
         response = self.llm.invoke(plan_messages)
         
-        # Parse the plan
         import json
         try:
             plan_data = json.loads(response.content)
             
             if plan_data.get("simple"):
-                # Question is too simple for complex query skill
                 logger.info(f"[ComplexQuery] Question is simple: {plan_data.get('reason')}")
                 new_message = AIMessage(content=f"This question is too simple for complex query handling. Reason: {plan_data.get('reason')}")
                 return {
@@ -197,6 +260,20 @@ If the question is simple (single table, single query), output:
             
             steps = plan_data.get("steps", [])
             logger.info(f"[ComplexQuery] Generated plan with {len(steps)} steps")
+
+            # ── Session plan: create plan file ─────────────────────────────
+            new_task_id = task_id
+            if self._plan_manager:
+                if not task_id:
+                    new_task_id = self._plan_manager.new_task_id()
+                self._plan_manager.create_plan(
+                    task_id=new_task_id,
+                    title=user_question[:80],
+                    description=user_question,
+                    skill="complex_query",
+                    steps=steps,
+                )
+                logger.info(f"[SessionPlan] Plan file: {self._plan_manager.get_plan_path(new_task_id)}")
             
             new_message = AIMessage(content=f"Query plan generated with {len(steps)} steps:\n" + 
                                            "\n".join([f"{s['step_id']}. {s['description']}" for s in steps]))
@@ -205,7 +282,8 @@ If the question is simple (single table, single query), output:
                 "messages": [new_message],
                 "query_plan": steps,
                 "step_results": {},
-                "plan_completed": False
+                "plan_completed": False,
+                "task_id": new_task_id,
             }
             
         except json.JSONDecodeError as e:
@@ -260,6 +338,11 @@ If the question is simple (single table, single query), output:
         for step in ready_steps:
             step_id = step["step_id"]
             query = step["query"]
+            task_id = state.get("task_id", "")
+            
+            # ── Session plan: mark step in_progress ───────────────────────
+            if self._plan_manager and task_id:
+                self._plan_manager.update_step(task_id, step_id, "in_progress")
             
             # Replace placeholders with actual results from dependencies
             query = self._resolve_query_placeholders(query, step.get("depends_on", []), step_results)
@@ -279,6 +362,15 @@ If the question is simple (single table, single query), output:
                 }
                 logger.info(f"[ComplexQuery] Step {step_id} executed successfully")
                 
+                # ── Session plan: mark step done ──────────────────────────
+                if self._plan_manager and task_id:
+                    result_preview = str(result)[:200] if result else ""
+                    self._plan_manager.update_step(
+                        task_id, step_id, "done",
+                        sql=query,
+                        result_summary=result_preview,
+                    )
+                
             except Exception as e:
                 logger.error(f"[ComplexQuery] Step {step_id} failed: {e}")
                 step_results[step_id] = {
@@ -289,6 +381,18 @@ If the question is simple (single table, single query), output:
                     "error": str(e),
                     "success": False
                 }
+                # ── Session plan: mark step failed ────────────────────────
+                if self._plan_manager and task_id:
+                    self._plan_manager.update_step(
+                        task_id, step_id, "failed",
+                        sql=query,
+                        error=str(e),
+                    )
+                    self._plan_manager.add_note(
+                        task_id, "blocker",
+                        f"Step {step_id} 执行失败",
+                        f"SQL: {query[:150]}\n错误: {str(e)[:150]}",
+                    )
         
         return {"step_results": step_results}
     
@@ -384,19 +488,24 @@ If the question is simple (single table, single query), output:
         return {"messages": [new_message]}
     
     def _judge_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Check if all steps are completed"""
+        """Check if all steps are completed and mark session plan accordingly"""
         logger.info("[ComplexQuery] Judging plan completion")
         
         query_plan = state.get("query_plan", [])
         step_results = state.get("step_results", {})
+        task_id = state.get("task_id", "")
         
-        # Check if all steps are completed
         total_steps = len(query_plan)
         completed_steps = len(step_results)
-        
         all_completed = total_steps == completed_steps
         
         logger.info(f"[ComplexQuery] Completion: {completed_steps}/{total_steps} steps")
+        
+        # ── Session plan: mark overall task complete ───────────────────────
+        if self._plan_manager and task_id and all_completed:
+            success = all(r.get("success", False) for r in step_results.values())
+            self._plan_manager.mark_complete(task_id, success=success)
+            logger.info(f"[SessionPlan] Task {task_id} marked {'done' if success else 'failed'}")
         
         return {"plan_completed": all_completed}
     

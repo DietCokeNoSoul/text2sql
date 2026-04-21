@@ -48,12 +48,43 @@ class SkillBasedGraphBuilder:
         from skills.simple_query import SimpleQuerySkill
         from skills.complex_query import ComplexQuerySkill
         from skills.data_analysis import DataAnalysisSkill
+
+        # Initialize DualTowerRetriever if enabled
+        self._retriever = None
+        if config.retrieval.enabled:
+            try:
+                from agent.retrieval import DualTowerRetriever
+                self._retriever = DualTowerRetriever(
+                    db_manager=db_manager,
+                    milvus_host=config.retrieval.milvus_host,
+                    milvus_port=config.retrieval.milvus_port,
+                    top_k_columns=config.retrieval.top_k_columns,
+                    max_candidate_tables=config.retrieval.max_candidate_tables,
+                    score_threshold=config.retrieval.score_threshold,
+                )
+                self._retriever.build_index(force_rebuild=config.retrieval.force_rebuild)
+                logger.info("[SkillBuilder] DualTowerRetriever ready")
+            except Exception as e:
+                logger.warning(f"[SkillBuilder] DualTowerRetriever init failed (will use full schema): {e}")
+                self._retriever = None
+        
+        # Initialize SessionPlanManager for task tracking
+        self._plan_manager = None
+        try:
+            from agent.session_plan import SessionPlanManager
+            import os
+            sessions_dir = os.path.join(config.output.report_dir, "sessions")
+            self._plan_manager = SessionPlanManager(base_dir=sessions_dir)
+            logger.info(f"[SkillBuilder] SessionPlanManager ready (dir={sessions_dir})")
+        except Exception as e:
+            logger.warning(f"[SkillBuilder] SessionPlanManager init failed: {e}")
+            self._plan_manager = None
         
         # Initialize Skills
         logger.info("Initializing Skills...")
         self.simple_skill = SimpleQuerySkill(llm, tool_manager, db_manager)
-        self.complex_skill = ComplexQuerySkill(llm, tool_manager, db_manager)
-        self.analysis_skill = DataAnalysisSkill(llm, tool_manager, db_manager, config=config)
+        self.complex_skill = ComplexQuerySkill(llm, tool_manager, db_manager, retriever=self._retriever, plan_manager=self._plan_manager)
+        self.analysis_skill = DataAnalysisSkill(llm, tool_manager, db_manager, config=config, plan_manager=self._plan_manager)
         
         logger.info("Skills initialized successfully")
     

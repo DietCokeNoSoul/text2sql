@@ -79,9 +79,11 @@ class DataAnalysisSkill(BaseSkill):
         tool_manager: SQLToolManager,
         db_manager: SQLDatabaseManager,
         config: Optional[AgentConfig] = None,
+        plan_manager: Optional[object] = None,  # SessionPlanManager instance
     ):
         self.db_manager = db_manager
         self._output_config: OutputConfig = config.output if config else OutputConfig()
+        self._plan_manager = plan_manager
         
         super().__init__(
             name="data_analysis",
@@ -109,6 +111,7 @@ class DataAnalysisSkill(BaseSkill):
             visualizations: list
             chart_files: list   # paths to generated SVG chart files
             report: str
+            task_id: str        # session plan tracking
         
         graph = StateGraph(DataAnalysisState)
         
@@ -185,13 +188,37 @@ Return ONLY the JSON object, nothing else.
             
             logger.info(f"[DataAnalysis] Goal understood: {goal_data.get('objective', 'N/A')}")
             
+            # ── Session plan: create plan with 7 fixed steps ──────────────
+            task_id = ""
+            if self._plan_manager:
+                task_id = self._plan_manager.new_task_id()
+                self._plan_manager.create_plan(
+                    task_id=task_id,
+                    title=user_question[:80],
+                    description=user_question,
+                    skill="data_analysis",
+                    steps=[
+                        {"step_id": 1, "description": "understand_goal: 理解分析目标", "depends_on": []},
+                        {"step_id": 2, "description": "explore_data: 探索数据库结构", "depends_on": [1]},
+                        {"step_id": 3, "description": "plan_analysis: 制定分析计划", "depends_on": [2]},
+                        {"step_id": 4, "description": "generate_queries: 生成SQL查询", "depends_on": [3]},
+                        {"step_id": 5, "description": "analyze_results: 分析结果洞察", "depends_on": [4]},
+                        {"step_id": 6, "description": "visualize: 生成可视化建议", "depends_on": [5]},
+                        {"step_id": 7, "description": "generate_report: 生成分析报告", "depends_on": [6]},
+                    ],
+                )
+                self._plan_manager.update_step(task_id, 1, "done",
+                    result_summary=goal_data.get("objective", ""))
+                logger.info(f"[SessionPlan] Created plan {task_id}")
+            
             new_message = AIMessage(
                 content=f"Analysis Goal:\n{analysis_goal}"
             )
             
             return {
                 "messages": [new_message],
-                "analysis_goal": analysis_goal
+                "analysis_goal": analysis_goal,
+                "task_id": task_id,
             }
             
         except (json.JSONDecodeError, ValueError) as e:
@@ -199,6 +226,20 @@ Return ONLY the JSON object, nothing else.
             error_message = AIMessage(content=f"Failed to understand goal: {str(e)}")
             return {"messages": [error_message], "analysis_goal": "{}"}
     
+    # ── Session plan helpers ───────────────────────────────────────────────
+
+    def _step_start(self, state: Dict[str, Any], step_id: int) -> None:
+        """Mark a step as in_progress in the session plan."""
+        task_id = state.get("task_id", "")
+        if self._plan_manager and task_id:
+            self._plan_manager.update_step(task_id, step_id, "in_progress")
+
+    def _step_done(self, state: Dict[str, Any], step_id: int, summary: str = "") -> None:
+        """Mark a step as done in the session plan."""
+        task_id = state.get("task_id", "")
+        if self._plan_manager and task_id:
+            self._plan_manager.update_step(task_id, step_id, "done", result_summary=summary[:200])
+
     # ============ Node 2: Explore Data ============
     
     def _explore_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -212,6 +253,7 @@ Return ONLY the JSON object, nothing else.
         - Key relationships
         """
         logger.info("[DataAnalysis] Exploring data")
+        self._step_start(state, 2)
         
         # List tables (uses cache if available)
         list_tables_tool = self.tool_manager.get_list_tables_tool()
@@ -230,6 +272,7 @@ Return ONLY the JSON object, nothing else.
         
         exploration_summary = f"Found {len(tables)} tables: {', '.join(tables)}. Schema loaded ({len(combined_schema)} chars)."
         new_message = AIMessage(content=exploration_summary)
+        self._step_done(state, 2, exploration_summary)
         
         return {
             "messages": [new_message],
@@ -250,6 +293,7 @@ Return ONLY the JSON object, nothing else.
         - Expected insights
         """
         logger.info("[DataAnalysis] Planning analysis")
+        self._step_start(state, 3)
         
         analysis_goal = state.get("analysis_goal", "{}")
         combined_schema = state.get("combined_schema", "")
@@ -297,6 +341,7 @@ Return ONLY the JSON object, nothing else.
             plan_data = extract_json_from_response(response.content)
             
             logger.info(f"[DataAnalysis] Plan created with {len(plan_data.get('steps', []))} steps")
+            self._step_done(state, 3, f"{len(plan_data.get('steps', []))} analysis steps planned")
             
             new_message = AIMessage(
                 content=f"Analysis Plan:\n{json.dumps(plan_data, indent=2, ensure_ascii=False)}"
@@ -321,6 +366,7 @@ Return ONLY the JSON object, nothing else.
         Generate SQL queries based on the analysis plan.
         """
         logger.info("[DataAnalysis] Generating SQL queries")
+        self._step_start(state, 4)
         
         analysis_plan = state.get("analysis_plan", {})
         analysis_goal = state.get("analysis_goal", "{}")
@@ -383,6 +429,7 @@ Available Tables and Schemas:
         new_message = AIMessage(
             content=f"Generated {len(sql_queries)} SQL queries for analysis."
         )
+        self._step_done(state, 4, f"{len(sql_queries)} queries generated")
         
         return {
             "messages": [new_message],
@@ -443,6 +490,7 @@ Output format:
         Run SQL queries and interpret the results.
         """
         logger.info("[DataAnalysis] Analyzing results")
+        self._step_start(state, 5)
         
         sql_queries = state.get("sql_queries", [])
         query_tool = self.tool_manager.get_query_tool()
@@ -502,6 +550,7 @@ What are the key findings?
         new_message = AIMessage(
             content=f"Executed {len(query_results)} queries, extracted {len(insights)} insights."
         )
+        self._step_done(state, 5, f"{len(insights)} insights from {len(query_results)} queries")
         
         return {
             "messages": [new_message],
@@ -516,6 +565,7 @@ What are the key findings?
         Generate visualization recommendations AND actual SVG chart files.
         """
         logger.info("[DataAnalysis] Generating visualizations")
+        self._step_start(state, 6)
         
         from skills.data_analysis.chart_generator import ChartGenerator
 
@@ -603,6 +653,7 @@ Output as JSON ONLY:
         new_message = AIMessage(
             content=f"Generated {len(visualizations)} viz recommendations. {chart_summary}."
         )
+        self._step_done(state, 6, f"{len(visualizations)} visualizations, {len(chart_files)} charts")
 
         return {
             "messages": [new_message],
@@ -618,6 +669,7 @@ Output as JSON ONLY:
         Appends generated chart file paths at the end of the report.
         """
         logger.info("[DataAnalysis] Generating analysis report")
+        self._step_start(state, 7)
         
         analysis_goal = state.get("analysis_goal", "{}")
         insights = state.get("insights", [])
@@ -699,6 +751,13 @@ Output as JSON ONLY:
             logger.info(f"[DataAnalysis] Report saved: {report_path}")
         
         new_message = AIMessage(content=report_content)
+        self._step_done(state, 7, f"Report generated ({len(report_content)} chars)")
+        
+        # ── Session plan: mark overall task complete ───────────────────────
+        task_id = state.get("task_id", "")
+        if self._plan_manager and task_id:
+            self._plan_manager.mark_complete(task_id, success=True)
+            logger.info(f"[SessionPlan] Task {task_id} complete")
         
         return {
             "messages": [new_message],

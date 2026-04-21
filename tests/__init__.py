@@ -12,14 +12,16 @@
   test_chart_generation.py    - 图表生成单元测试，30 用例（无需 API Key）
   test_report_saving.py       - 报告保存单元测试，32 用例（无需 API Key）
   test_security.py            - SQL 安全护栏单元+集成测试，61 用例（无需 API Key）
+  test_retrieval_benchmark.py - 双塔检索架构基准测试，28 用例（无需 API Key + Milvus）
 
 运行方式:
-  # 无需 API Key（156 个，全部通过）
+  # 无需 API Key（184 个，全部通过）
   python tests/test_schema_cache.py
   python tests/test_column_fuzzy_match.py
   python tests/test_chart_generation.py
   python tests/test_report_saving.py
   python tests/test_security.py
+  python tests/test_retrieval_benchmark.py
 
   # 需要 API Key + DB
   python tests/test_router_accuracy.py

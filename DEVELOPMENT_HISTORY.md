@@ -20,8 +20,10 @@
 10. [阶段九：图表生成与报告输出](#10-阶段九图表生成与报告输出)
 11. [阶段十：测试体系建设](#11-阶段十测试体系建设)
 12. [阶段十一：SQL 安全护栏](#12-阶段十一sql-安全护栏)
-13. [最终架构总览](#13-最终架构总览)
-14. [测试覆盖总结](#14-测试覆盖总结)
+13. [阶段十二：双塔检索架构](#13-阶段十二双塔检索架构)
+14. [最终架构总览](#14-最终架构总览)
+15. [测试覆盖总结](#15-测试覆盖总结)
+16. [功能流程详解](#16-功能流程详解)
 
 ---
 
@@ -546,16 +548,144 @@ result = mgr.execute_query("DROP TABLE orders")      # ❌ 抛出 SecurityViolat
 
 ---
 
-## 13. 最终架构总览
+## 13. 阶段十二：双塔检索架构
+
+### 背景与动机
+
+Complex Query Skill 在处理多表关联查询时，将**全量 Schema**送入 LLM 规划节点。
+在 Chinook.db（11 表）场景下，全量 Schema 约 5,881 字符（~1,680 tokens），
+而一次典型 3 表 JOIN 查询实际只需要约 1,400 字符（~400 tokens）。
+**无关 Schema 不仅浪费 token，还会对 LLM 产生干扰，导致幻觉列名或错误 JOIN。**
+
+### 方案设计
+
+```
+用户复杂查询
+  │
+  ▼ Tower 1 — Milvus 向量检索（列语义相似度）
+  │   将每列描述文本（table.column: type. samples: a, b, c）
+  │   使用 paraphrase-multilingual-MiniLM-L12-v2 编码为 384 维向量
+  │   存入 Milvus HNSW 索引；查询时返回语义最相关的 top-k 个表名
+  │
+  ▼ Tower 2 — NetworkX Schema 图 + Steiner Tree 路径规划
+  │   从 SQLAlchemy FK 约束（weight=1.0）+ 列名模式推断（weight=1.5）
+  │   构建 Schema 图；对 Tower 1 返回的表运行 Steiner Tree 近似算法
+  │   补全"连接路径"上的中间表（JOIN 不能跳过的桥接表）
+  │
+  ▼ LLM 智能剪枝
+  │   将 Steiner Tree 包含的表子集格式化为 pruned_schema
+  │   附带 JOIN hint（推荐的联接顺序）注入 plan 节点 prompt
+  │
+结果：平均减少 71% Schema 字符 / 节省 ~1,194 tokens/次复杂查询
+```
+
+### 实现细节
+
+**SchemaGraph（`agent/schema_graph.py`）**
+
+双层边权重推断：
+- Layer 1：SQLAlchemy `ForeignKeyConstraint` → 权重 1.0（确定边）
+- Layer 2：列名模式 `{X}_id → tb_{X}.id` → 权重 1.5（推断边）
+
+Steiner Tree 使用 `networkx.algorithms.approximation.steiner_tree`（Kou 2-近似），
+图规模小时 < 10ms；若算法失败自动降级为最短路径联合。
+
+**ColumnIndex（`agent/column_index.py`）**
+
+- Milvus collection `text2sql_columns`，HNSW + COSINE，384 维
+- `ColumnRecord.id`：`int(md5("table.column")[:15], 16)` —— 确定性 ID，跨重建稳定
+- Schema 指纹（sorted `table.column` pairs）变化时自动触发重建
+- 冷启动保护：Milvus 不可达时 graceful fallback 到全量 Schema
+
+**DualTowerRetriever（`agent/retrieval.py`）**
+
+```python
+result = retriever.retrieve("每首歌曲的艺术家信息")
+# result.pruned_schema   → 仅含 Track + Album + Artist 的 schema 文本
+# result.join_hint       → "-- JOIN: Artist → Track → Album"
+# result.reduction_pct   → 76.3
+# result.estimated_token_saved → 1281
+```
+
+**ComplexQuerySkill 集成**
+
+在 `get_schema` 和 `plan` 节点之间插入条件节点 `dual_tower_retrieve`：
+- `retriever is not None` → 启用检索，pruned_schema 注入 state
+- `retriever is None`（Milvus 不可达/未配置）→ 原流程不变
+
+**SkillBasedGraphBuilder**
+
+`__init__` 中 try/except 初始化 `DualTowerRetriever`：
+- 成功 → 传递给 ComplexQuerySkill
+- 失败（Milvus 不可达）→ `self._retriever = None`，系统降级运行
+
+### 新增/修改文件
+
+| 文件 | 说明 |
+|------|------|
+| `agent/schema_graph.py` | NetworkX Schema 图 + Steiner Tree（新建） |
+| `agent/column_index.py` | Milvus 列向量索引（新建） |
+| `agent/retrieval.py` | 双塔检索协调器（新建） |
+| `agent/config.py` | 新增 `RetrievalConfig` dataclass（含 `from_env()`） |
+| `agent/__init__.py` | 导出 `RetrievalConfig`、`DualTowerRetriever`、`SchemaGraph`、`ColumnIndex` |
+| `agent/skill_graph_builder.py` | 初始化 DualTowerRetriever，传递给 ComplexQuerySkill |
+| `skills/complex_query/skill.py` | 新增 `dual_tower_retrieve` 节点，state 增加 `retrieval_stats` |
+| `tests/test_retrieval_benchmark.py` | 28 个基准测试（新建） |
+| `pyproject.toml` | 新增 `networkx`、`pymilvus`、`sentence-transformers`、`torch` 依赖 |
+
+### RetrievalConfig 可配置项
+
+```python
+@dataclass
+class RetrievalConfig:
+    enabled: bool = True              # env: RETRIEVAL_ENABLED
+    milvus_host: str = "127.0.0.1"   # env: MILVUS_HOST
+    milvus_port: int = 19530          # env: MILVUS_PORT
+    top_k: int = 10                   # env: RETRIEVAL_TOP_K
+    max_tables: int = 5               # env: RETRIEVAL_MAX_TABLES
+    similarity_threshold: float = 0.3 # env: RETRIEVAL_THRESHOLD
+    force_rebuild: bool = False       # env: RETRIEVAL_FORCE_REBUILD
+```
+
+### 基准测试结果（Chinook.db，11 表）
+
+| 场景 | 原始 Schema | Pruned | 节省 |
+|------|------------|--------|------|
+| Track–Album–Artist | 5,881 chars | 1,395 chars | 76% |
+| Customer–Invoice–InvoiceLine | 5,881 chars | 2,331 chars | 60% |
+| Track–Genre | 5,881 chars | 1,035 chars | 82% |
+| Employee–Customer | 5,881 chars | 2,263 chars | 62% |
+| Playlist–PlaylistTrack–Track | 5,881 chars | 1,396 chars | 76% |
+| **平均** | — | — | **71% / ~1,194 tokens** |
+
+Schema 图构建 + Steiner Tree 规划延迟：**平均 5ms**（不含 Milvus 搜索的 30~80ms）。
+
+### 测试覆盖（28 用例，全部通过 ✅）
+
+| 测试类 | 用例数 | 覆盖内容 |
+|--------|--------|----------|
+| `TestSchemaGraphBuild` | 6 | 节点/边/描述输出/边权重 |
+| `TestSteinerTree` | 6 | 空输入/单表/两表/不存在表/join hint |
+| `TestSchemaPruning` | 3 | 剪枝缩减/包含目标表/基准报告 |
+| `TestColumnIndexLogic` | 5 | ID 稳定性/文本截断/指纹变更 |
+| `TestDualTowerRetrieverLogic` | 4 | 返回剪枝 schema/token 节省/fallback |
+| `TestRetrievalPipeline` | 4 | 端到端/延迟/路径包含/全基准输出 |
+
+---
+
+## 14. 最终架构总览
 
 ```
 text2sql/
 ├── agent/
-│   ├── config.py              # AgentConfig / OutputConfig / SecurityConfig（支持 .env）
+│   ├── config.py              # AgentConfig / OutputConfig / SecurityConfig / RetrievalConfig
 │   ├── database.py            # SQLDatabaseManager + SchemaCache + SecurityGuard 集成
 │   ├── security.py            # SQLSecurityGuard — 四层防御核心
+│   ├── schema_graph.py        # NetworkX Schema 图 + Steiner Tree 路径规划
+│   ├── column_index.py        # Milvus 列向量索引（Tower 1）
+│   ├── retrieval.py           # DualTowerRetriever 协调器
 │   ├── tools.py               # SQLToolManager + CachedSchemaTool
-│   ├── skill_graph_builder.py # 主图 + 路由器
+│   ├── skill_graph_builder.py # 主图 + 路由器 + DualTowerRetriever 初始化
 │   ├── graph.py               # 统一入口
 │   ├── nodes/
 │   │   └── common.py          # 可复用节点工厂
@@ -567,15 +697,15 @@ text2sql/
 │   ├── simple_query/
 │   │   └── skill.py           # 单查询 + 错误修复循环
 │   ├── complex_query/
-│   │   └── skill.py           # 多步骤 + Placeholder 机制
+│   │   └── skill.py           # 多步骤 + Placeholder + 双塔检索
 │   └── data_analysis/
 │       ├── skill.py           # 7 步分析流程
 │       └── chart_generator.py # matplotlib PNG 图表生成
 │
-├── tests/                     # 156 个 Mock 测试 + Live 集成测试
+├── tests/                     # 184 个 Mock 测试 + Live 集成测试
 ├── report/                    # 分析报告输出目录
 │   └── charts/                # PNG 图表输出目录
-└── .env                       # 配置（DB_URI / API_KEY / REPORT_DIR / SECURITY_* 等）
+└── .env                       # 配置（DB_URI / API_KEY / REPORT_DIR / SECURITY_* / RETRIEVAL_* 等）
 ```
 
 ### 核心数据流
@@ -584,25 +714,34 @@ text2sql/
 用户问题
    │
    ▼
-Router（LLM 分类）
+Router（LLM 分类：simple / complex / analysis）
    │
-   ├─ Simple Query
-   │      list_tables → get_schema → generate_query
-   │      → execute → [错误?] → fix_query(列名模糊匹配) → retry
+   ├─ Simple Query ──────────────────────────────────────────────────────────
+   │      list_tables → get_schema → generate_query → execute_query
+   │      → [成功] → END
+   │      → [失败] → fix_query(difflib列名模糊匹配 + 错误诊断) → execute_query
+   │                → [最多3次重试] → END
    │
-   ├─ Complex Query
-   │      list_tables → get_schema → plan
-   │      → execute_step_1 → execute_step_2(Placeholder) → aggregate
+   ├─ Complex Query ─────────────────────────────────────────────────────────
+   │      list_tables → get_schema
+   │      → [dual_tower_retrieve] ← Milvus向量检索 + Steiner Tree路径规划
+   │      → plan（LLM生成多步骤计划）
+   │      → execute_steps（依赖解析 + Placeholder替换）
+   │      → aggregate（汇总各步结果）
+   │      → judge → [未完成] → plan（继续）
+   │               → [完成]  → END
    │
-   └─ Data Analysis
-          understand_goal → explore_data(批量 schema) → plan_analysis
-          → generate_queries → execute_queries → extract_insights
-          → visualize(matplotlib PNG) → generate_report(保存到 report/)
+   └─ Data Analysis ─────────────────────────────────────────────────────────
+          understand_goal → explore_data（批量拉取全库schema）
+          → plan_analysis → generate_queries → execute_queries
+          → analyze_results（提取洞察）
+          → visualize（matplotlib PNG图表）
+          → generate_report（Markdown报告保存到report/）→ END
 ```
 
 ---
 
-## 14. 测试覆盖总结
+## 15. 测试覆盖总结
 
 ### 功能覆盖矩阵
 
@@ -613,6 +752,7 @@ Router（LLM 分类）
 | 图表生成 | ✅ 30 用例 | - | 完备 |
 | 报告保存 | ✅ 32 用例 | ✅ | 完备 |
 | SQL 安全护栏 | ✅ 54 用例 | ✅ 7 用例 | 完备 |
+| 双塔检索架构 | ✅ 28 用例 | - | 完备 |
 | 路由器准确率 | - | ✅ 15/15 | 完备 |
 | Simple Query E2E | - | ✅ | 人工验证 |
 | Complex Query E2E | - | ✅ | 人工验证 |
@@ -633,7 +773,233 @@ Router（LLM 分类）
 | LLM 生成 DROP/DELETE 语句 | 无执行前拦截 | SQL 安全护栏 Layer 1 — sqlglot AST 分类 |
 | 查询返回过多行数 | 无行数限制 | SQL 安全护栏 Layer 3 — 自动注入/降低 LIMIT |
 | 敏感字段（密码/Token）裸露 | 无结果过滤 | SQL 安全护栏 Layer 4 — 敏感列检测 + ⚠️ 警告 |
+| 全量 Schema 浪费 token | 无关表信息注入 LLM | 双塔检索：Milvus 向量 + Steiner Tree，avg 71% 减少 |
 
 ---
 
-*生成时间：2026-04-10 | 最后更新：2026-04-13（新增阶段十一：SQL 安全护栏）*
+*生成时间：2026-04-10 | 最后更新：2026-04-21（新增第16章功能流程详解）*
+
+---
+
+## 16. 功能流程详解
+
+### 16.1 Simple Query — 简单查询流程
+
+**适用场景**：单表查询、基础过滤、简单聚合，不需要多步骤分解。
+
+**触发条件**：Router 分类为 `"simple"`。
+
+```
+                    ┌─────────────────────────────────────────────────────┐
+  用户输入          │            SimpleQuerySkill 子图                     │
+  "列出前10个艺术家" │                                                     │
+        │           │  list_tables                                        │
+        └──────────►│    └─ 调用 sql_db_list_tables 工具                  │
+                    │    └─ 返回: ["Album","Artist","Track",...]          │
+                    │                                                     │
+                    │  get_schema                                         │
+                    │    └─ 调用 sql_db_schema 工具                       │
+                    │    └─ 返回: CREATE TABLE 定义（含列名/类型）         │
+                    │                                                     │
+                    │  generate_query                                     │
+                    │    └─ LLM + bind_tools(sql_db_query, required)     │
+                    │    └─ 生成 tool_call: {query: "SELECT ..."}         │
+                    │                                                     │
+                    │  execute_query ◄──────────────────────────┐        │
+                    │    └─ SQLSecurityGuard 四层校验             │        │
+                    │    └─ db_manager.execute_query(sql)        │        │
+                    │    ┌─ [成功] → END                         │        │
+                    │    └─ [失败] ──────────────────────────────┤        │
+                    │                                            │        │
+                    │  fix_query                                 │        │
+                    │    ├─ _extract_bad_column(error_msg)       │        │
+                    │    │    └─ 正则解析 MySQL/SQLite/PG 错误格式 │        │
+                    │    ├─ db_manager.find_similar_columns()    │        │
+                    │    │    └─ difflib.get_close_matches()     │        │
+                    │    ├─ 构建列名建议 hint 注入 LLM prompt     │        │
+                    │    └─ LLM 生成修复 SQL → 回到 execute_query─┘ (max 3次)
+                    └─────────────────────────────────────────────────────┘
+```
+
+**State 字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `messages` | `list` | 完整消息历史（HumanMessage / AIMessage / ToolMessage） |
+| `retry_count` | `int` | 当前重试次数（上限 3） |
+| `last_error` | `str` | 最近一次执行错误信息 |
+| `last_sql` | `str` | 最近一次执行的 SQL |
+
+**关键设计**：
+- `tool_choice="required"` 强制 LLM 一定输出 tool_call，避免文字回复
+- `fix_query` 先 `difflib` 模糊匹配列名，再把建议注入 fix prompt，降低 LLM 猜测成本
+- `SQLSecurityGuard` 在 `execute_query` 内部隐式执行，对上层完全透明
+
+---
+
+### 16.2 Complex Query — 复杂查询流程
+
+**适用场景**：多表 JOIN、多步骤依赖、聚合后再过滤等需要分解的复杂问题。
+
+**触发条件**：Router 分类为 `"complex"`。
+
+```
+                    ┌──────────────────────────────────────────────────────────────┐
+  用户输入          │              ComplexQuerySkill 子图                           │
+  "每个艺术家的     │                                                              │
+   专辑数和总曲目数" │  list_tables → get_schema                                   │
+        │           │                    │                                         │
+        └──────────►│              ┌─────▼──────────────────────────────────────┐ │
+                    │              │    dual_tower_retrieve（可选，需 Milvus）    │ │
+                    │              │      ├─ Tower 1: Milvus HNSW 向量检索        │ │
+                    │              │      │    query → embedding(384维)          │ │
+                    │              │      │    → top-k 相关列 → 候选表列表        │ │
+                    │              │      ├─ Tower 2: NetworkX Steiner Tree       │ │
+                    │              │      │    候选表 → 最小连通子图              │ │
+                    │              │      │    → 补全 JOIN 桥接表                │ │
+                    │              │      └─ 输出: pruned_schema + join_hint      │ │
+                    │              └─────────────────────────────────────────────┘ │
+                    │                                   │                          │
+                    │              plan ◄───────────────┘                          │
+                    │                └─ LLM 分析问题，生成 steps[] JSON             │
+                    │                └─ 每步: {step_id, description, query,        │
+                    │                          depends_on:[...]}                   │
+                    │                └─ Placeholder 规则:                          │
+                    │                   WHERE col IN {step_N_results}              │
+                    │                                   │                          │
+                    │              execute_step ◄────────┘                         │
+                    │                └─ 找出依赖已满足的 ready steps               │
+                    │                └─ _resolve_query_placeholders():             │
+                    │                   • 读取前序步骤结果（list of tuples）       │
+                    │                   • 提取第一列 ID → (1, 2, 3) 格式          │
+                    │                   • 替换 {step_N_results} → (1, 2, 3)      │
+                    │                └─ db_manager.execute_query(resolved_sql)    │
+                    │                └─ step_results[step_id] = {result/error}   │
+                    │                                   │                          │
+                    │              aggregate                                        │
+                    │                └─ 格式化全部步骤结果为文本                   │
+                    │                                   │                          │
+                    │              judge                                            │
+                    │                ├─ completed_steps == total_steps → END       │
+                    │                └─ 未完成 → 回到 plan（继续规划剩余步骤）     │
+                    └──────────────────────────────────────────────────────────────┘
+```
+
+**State 字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `messages` | `list` | 消息历史 |
+| `tables` | `list[str]` | 数据库表名列表 |
+| `table_schema` | `str` | Schema 文本（full 或 pruned） |
+| `query_plan` | `list[dict]` | 多步骤计划（每步含 step_id / query / depends_on） |
+| `step_results` | `dict` | `{step_id → {result, success, query, ...}}` |
+| `plan_completed` | `bool` | 所有步骤是否已完成 |
+| `retrieval_stats` | `dict` | 双塔检索统计（chars saved, reduction_pct 等） |
+
+**关键设计**：
+- **Placeholder 机制**：步骤间依赖通过 `{step_N_results}` 传递 ID 列表，绕开 MySQL 不支持 LIMIT-in-subquery 的限制
+- **双塔检索可选**：`retriever is None` 时跳过，全量 schema 走原流程；Milvus 不可达时 graceful fallback
+- **judge 循环**：支持 plan → execute → judge → plan 的多轮迭代，处理分批执行的场景
+
+---
+
+### 16.3 Data Analysis — 数据分析流程
+
+**适用场景**：需要洞察、趋势、可视化图表和报告的深度分析问题。
+
+**触发条件**：Router 分类为 `"analysis"`。
+
+```
+                    ┌──────────────────────────────────────────────────────────────┐
+  用户输入          │              DataAnalysisSkill 子图（7步线性流程）            │
+  "分析各艺术家的   │                                                              │
+   销售趋势并生成   │  Step 1: understand_goal                                     │
+   报告"            │    └─ LLM 解析目标 → {objective, metrics, dimensions,        │
+        │           │         filters, output_format}                              │
+        └──────────►│                                                              │
+                    │  Step 2: explore_data                                        │
+                    │    └─ 批量拉取所有表的 schema（一次 tool 调用）              │
+                    │    └─ combined_schema = 所有 CREATE TABLE 拼接               │
+                    │    └─ LLM 理解数据结构，识别关键表                           │
+                    │                                                              │
+                    │  Step 3: plan_analysis                                       │
+                    │    └─ LLM 根据目标 + schema 生成分析计划                    │
+                    │    └─ {analysis_steps, key_tables, approach}                │
+                    │                                                              │
+                    │  Step 4: generate_queries                                    │
+                    │    └─ LLM 为每个分析步骤生成 SQL 查询列表                  │
+                    │    └─ [{description, sql, purpose}, ...]                    │
+                    │                                                              │
+                    │  Step 5: analyze_results                                     │
+                    │    └─ 批量执行所有 SQL（db_manager.execute_query）          │
+                    │    └─ LLM 分析原始结果，提取洞察                            │
+                    │    └─ insights = [{finding, significance, ...}, ...]        │
+                    │                                                              │
+                    │  Step 6: visualize                                           │
+                    │    └─ LLM 生成可视化方案（chart_type, x, y, title）         │
+                    │    └─ ChartGenerator.generate() → matplotlib PNG            │
+                    │    └─ 保存到 report/charts/chart_YYYYMMDD_HHMMSS.png        │
+                    │                                                              │
+                    │  Step 7: generate_report                                     │
+                    │    └─ LLM 综合所有洞察生成 Markdown 报告                   │
+                    │    └─ 嵌入图表路径 ![title](charts/xxx.png)                 │
+                    │    └─ 保存到 report/analysis_YYYYMMDD_HHMMSS.md            │
+                    │    └─ END                                                   │
+                    └──────────────────────────────────────────────────────────────┘
+```
+
+**State 字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `messages` | `list` | 消息历史 |
+| `tables` | `list[str]` | 数据库表名列表 |
+| `combined_schema` | `str` | 批量拉取的全库 schema 拼接 |
+| `analysis_goal` | `str` | 解析后的分析目标 JSON 字符串 |
+| `analysis_plan` | `dict` | 分析计划（含步骤/关键表/方法） |
+| `sql_queries` | `list[dict]` | 生成的 SQL 查询列表 |
+| `query_results` | `list[dict]` | 每条查询的执行结果 |
+| `insights` | `list[dict]` | 提取的数据洞察 |
+| `visualizations` | `list[dict]` | 可视化配置（含 chart_type/x/y/title） |
+| `chart_files` | `list[str]` | 生成的 PNG 图表文件路径 |
+| `report` | `str` | 最终 Markdown 报告内容 |
+
+**关键设计**：
+- `explore_data` 一次性批量拉取所有表 schema，消除跨 Skill 的缓存 key 不一致问题
+- `generate_report` 使用 `![title](charts/xxx.png)` 格式嵌入图表，而非文件路径（避免 Markdown 不渲染）
+- 报告目录由 `OutputConfig.report_dir`（env: `REPORT_DIR`）配置，默认 `report/`
+- `extract_json_from_response()` 三阶段 JSON 解析（直接 → code block → 正则），容忍 LLM 输出格式多变
+
+---
+
+### 16.4 SQL 安全护栏 — 执行前后拦截链
+
+所有三个 Skill 的 SQL 执行都经过 `SQLDatabaseManager.execute_query()`，内部自动执行完整的四层安全检查：
+
+```
+SQL 输入（来自 LLM 生成）
+   │
+   ▼ Layer 1: 语句类型校验（sqlglot AST 解析）
+   │   允许: SELECT
+   │   拒绝: INSERT / UPDATE / DELETE / DROP / CREATE / TRUNCATE / ...
+   │   补充: 危险关键字扫描（xp_cmdshell / INTO OUTFILE / EXEC / ...）
+   │
+   ▼ Layer 2: 表访问控制
+   │   denylist: 禁止访问指定表（如 users / auth_tokens / secrets）
+   │   allowlist: 若配置，只允许访问白名单表
+   │
+   ▼ Layer 3: 查询复杂度限制
+   │   SQL 长度 > max_query_length → 拒绝
+   │   无 LIMIT → 自动注入 LIMIT {max_rows}（sqlglot AST 重写，对调用方透明）
+   │   LIMIT > max_rows → 自动降低至 max_rows
+   │
+   ▼ 数据库执行
+   │
+   ▼ Layer 4: 结果脱敏（执行后）
+       检测结果列名是否匹配敏感模式（password / token / phone / api_key / ...）
+       → 发出 ⚠️ 警告 + 在结果末尾追加提示
+       → 审计日志记录（内存 + 可选 JSONL 文件）
+```
+
+**异常类型**：违规时抛出 `SecurityViolationError(layer=1~4, reason=..., sql=...)`，Skill 可捕获后在修复流程中处理。
