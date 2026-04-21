@@ -72,3 +72,22 @@ class QueryExecutionError(SQLAgentError):
 class ToolNotFoundError(SQLAgentError):
     """找不到所需工具时抛出。"""
     pass
+
+
+class SecurityViolationError(SQLAgentError):
+    """SQL 安全护栏拦截时抛出。
+    
+    属性:
+        layer: 触发拦截的防御层（如 "Layer1_StatementType"）
+        reason: 拦截原因描述
+        sql: 被拒绝的 SQL 语句
+    """
+    
+    def __init__(self, reason: str, layer: str = "", sql: str = "") -> None:
+        super().__init__(reason)
+        self.layer = layer
+        self.reason = reason
+        self.sql = sql
+    
+    def __str__(self) -> str:
+        return f"[{self.layer}] {self.reason}"

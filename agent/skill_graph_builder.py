@@ -232,7 +232,7 @@ def create_skill_based_graph(
     logger.info("Creating Skill-based SQL Agent graph")
     
     # Initialize managers
-    db_manager = SQLDatabaseManager(config.database)
+    db_manager = SQLDatabaseManager(config.database, security_config=config.security)
     tool_manager = SQLToolManager(db_manager, llm)
     
     # Build graph

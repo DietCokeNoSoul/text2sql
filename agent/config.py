@@ -6,7 +6,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -71,6 +71,70 @@ class OutputConfig:
 
 
 @dataclass
+class SecurityConfig:
+    """SQL 安全护栏配置。
+    
+    四层防御：
+    - Layer 1: 语句类型控制（只允许 SELECT）
+    - Layer 2: 表访问控制（allowlist / denylist）
+    - Layer 3: 查询复杂度限制（行数 / 长度）
+    - Layer 4: 结果脱敏（敏感列名模糊匹配）
+    """
+    
+    # Layer 1: 语句类型控制
+    allowed_statements: List[str] = field(
+        default_factory=lambda: ["SELECT"]
+    )
+    blocked_keywords: List[str] = field(
+        default_factory=lambda: [
+            "xp_cmdshell", "INTO OUTFILE", "LOAD DATA",
+            "EXEC(", "EXECUTE(", "sp_executesql",
+            "OPENROWSET", "BULK INSERT",
+        ]
+    )
+
+    # Layer 2: 表访问控制
+    table_allowlist: Optional[List[str]] = None   # None = 允许所有表
+    table_denylist: List[str] = field(default_factory=list)
+
+    # Layer 3: 复杂度限制
+    max_rows: int = 1000          # 强制 LIMIT 上限
+    max_query_length: int = 5000  # SQL 字符串长度上限
+
+    # Layer 4: 结果脱敏
+    sensitive_column_patterns: List[str] = field(
+        default_factory=lambda: [
+            r"password", r"passwd", r"secret", r"token",
+            r"ssn", r"credit_card", r"phone", r"mobile",
+            r"id_card", r"api_key", r"private_key",
+        ]
+    )
+    mask_value: str = "***"
+
+    # 审计日志
+    enable_audit_log: bool = True
+    audit_log_file: Optional[str] = None  # None = 只写 logger，不写文件
+
+    @classmethod
+    def from_env(cls) -> "SecurityConfig":
+        """从环境变量读取安全配置。"""
+        denylist_raw = os.getenv("SECURITY_TABLE_DENYLIST", "")
+        denylist = [t.strip() for t in denylist_raw.split(",") if t.strip()]
+
+        allowlist_raw = os.getenv("SECURITY_TABLE_ALLOWLIST", "")
+        allowlist = [t.strip() for t in allowlist_raw.split(",") if t.strip()] or None
+
+        return cls(
+            max_rows=int(os.getenv("SECURITY_MAX_ROWS", "1000")),
+            max_query_length=int(os.getenv("SECURITY_MAX_QUERY_LENGTH", "5000")),
+            table_denylist=denylist,
+            table_allowlist=allowlist,
+            enable_audit_log=os.getenv("SECURITY_AUDIT_LOG", "true").lower() == "true",
+            audit_log_file=os.getenv("SECURITY_AUDIT_LOG_FILE") or None,
+        )
+
+
+@dataclass
 class AgentConfig:
     """SQL Agent 的主配置类。"""
     
@@ -78,6 +142,7 @@ class AgentConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
     
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "AgentConfig":
@@ -128,12 +193,16 @@ class AgentConfig:
             report_dir=os.getenv("REPORT_DIR", "report"),
             chart_dir=os.getenv("CHART_DIR", "report/charts"),
         )
+
+        # 安全护栏配置
+        security_config = SecurityConfig.from_env()
         
         return cls(
             database=db_config,
             llm=llm_config,
             logging=logging_config,
             output=output_config,
+            security=security_config,
         )
     
     def validate(self) -> None:

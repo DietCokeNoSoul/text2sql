@@ -19,8 +19,9 @@
 9. [阶段八：功能增强 — 列名模糊匹配](#9-阶段八功能增强--列名模糊匹配)
 10. [阶段九：图表生成与报告输出](#10-阶段九图表生成与报告输出)
 11. [阶段十：测试体系建设](#11-阶段十测试体系建设)
-12. [最终架构总览](#12-最终架构总览)
-13. [测试覆盖总结](#13-测试覆盖总结)
+12. [阶段十一：SQL 安全护栏](#12-阶段十一sql-安全护栏)
+13. [最终架构总览](#13-最终架构总览)
+14. [测试覆盖总结](#14-测试覆盖总结)
 
 ---
 
@@ -412,23 +413,147 @@ prompt += f"\n可能的正确列名: {hints}"
 | `test_column_fuzzy_match.py` | Unit（无需 API） | 20 | 列名提取、模糊匹配、提示生成 |
 | `test_chart_generation.py` | Unit（无需 API） | 30 | ChartSpec/PNG 渲染/SVG/from_query_result/_visualize |
 | `test_report_saving.py` | Unit（无需 API） | 32 | _save_report/目录创建/时间戳/OutputConfig env var |
+| `test_security.py` | Unit（无需 API） | 61 | 四层护栏/审计日志/SecurityConfig/集成测试 |
 | `test_router_accuracy.py` | Live（需 API） | 15 | 路由器分类准确率 |
 | `test_analysis_detailed.py` | Live（需 API） | 1 | Data Analysis 7 步完整流程 |
 | `test_simple_skill.py` | Live（需 API） | - | Simple Query 端到端 |
 | `test_complex_detailed.py` | Live（需 API） | - | Complex Query 端到端 |
 | `test_main_graph.py` | Live（需 API） | - | 主图集成测试 |
 
-**无需 API Key 的测试总计：95 个，全部通过 ✅**
+**无需 API Key 的测试总计：156 个，全部通过 ✅**
 
 ---
 
-## 12. 最终架构总览
+## 12. 阶段十一：SQL 安全护栏
+
+### 背景与动机
+
+Agent 生成的 SQL 语句直接在生产数据库上执行，存在多类安全风险：
+- LLM 幻觉可能生成 `DROP TABLE`、`DELETE` 等破坏性语句
+- 未受限的 `SELECT *` 可能返回密码、Token 等敏感字段
+- 无行数上限可能导致返回百万级数据阻塞服务
+- 无执行审计，无法追溯异常操作
+
+### 四层防御架构
+
+```
+SQL 输入
+  │
+  ▼ Layer 1 — 语句类型控制   (sqlglot AST 解析 + 危险关键字双保险)
+  │  默认只允许 SELECT；拒绝 INSERT/UPDATE/DELETE/DROP/CREATE/TRUNCATE 等
+  │  关键字扫描：xp_cmdshell / INTO OUTFILE / LOAD DATA / EXEC / OPENROWSET …
+  │
+  ▼ Layer 2 — 表访问控制
+  │  denylist：明确禁止访问的表（如 users、auth_tokens、secrets）
+  │  allowlist：可选白名单，仅允许列出的表被查询
+  │
+  ▼ Layer 3 — 查询复杂度限制
+  │  SQL 字符长度上限（默认 5000 字符）
+  │  自动注入 LIMIT（无 LIMIT 时注入；超出上限时强制降低）
+  │
+  ▼ Layer 4 — 结果脱敏（执行后）
+  │  检测查询涉及 password/token/phone/api_key/credit_card 等敏感列
+  │  在日志中发出 ⚠️ 警告并在返回结果末尾追加提示
+  │
+审计日志（内存记录 + 可选 JSONL 文件）
+```
+
+### 关键设计决策
+
+**使用 sqlglot 做 AST 解析（而非正则）**
+
+正则检测语句类型有大量绕过方式（注释混入、大小写变换、Unicode 转义等）。
+`sqlglot.parse()` 构建完整 AST，提取顶级语句节点类型，准确率更高。
+同时保留正则关键字扫描作为第二道防线，防御 sqlglot 未覆盖的方言或混淆输入。
+
+**LIMIT 重写而非拒绝**
+
+对于缺少 LIMIT 的查询，直接拒绝会破坏正常业务；
+策略改为**静默注入**最大行数限制，利用 sqlglot 重写 AST 后生成安全 SQL，
+对上层调用方完全透明。
+
+**警告式脱敏（Layer 4）**
+
+对敏感列采取「检测 + 警告」而非「替换列值」策略，原因：
+- 替换值会破坏 Data Analysis Skill 的数值计算
+- LLM 对结果的理解需要真实数据
+- 脱敏责任应由调用方（应用层）承担，安全层负责提示
+
+### 新增文件
+
+| 文件 | 内容 |
+|------|------|
+| `agent/security.py` | 四层防御核心；`SQLSecurityGuard`、`ValidationResult` |
+| `agent/types.py` | 新增 `SecurityViolationError`（含 layer/reason/sql 属性）|
+| `agent/config.py` | 新增 `SecurityConfig` dataclass（含 `from_env()`） |
+| `agent/database.py` | `execute_query` 接入护栏；`__init__` 接受 `security_config` |
+| `agent/__init__.py` | 导出 `SecurityConfig`、`SQLSecurityGuard`、`SecurityViolationError` |
+| `tests/test_security.py` | 61 个单元 + 集成测试，全部通过 ✅ |
+
+### SecurityConfig 可配置项
+
+```python
+@dataclass
+class SecurityConfig:
+    allowed_statements: list = ["SELECT"]          # 允许的语句类型
+    blocked_keywords: list = ["xp_cmdshell", ...]  # 危险关键字列表
+    table_allowlist: list | None = None            # 表白名单（None=全放行）
+    table_denylist: list = []                      # 表黑名单
+    max_rows: int = 1000                           # 最大返回行数
+    max_query_length: int = 5000                   # SQL 长度上限
+    sensitive_column_patterns: list = [...]        # 敏感列名正则列表
+    enable_audit_log: bool = True                  # 审计日志开关
+    audit_log_file: str | None = None              # JSONL 文件路径（None=仅 logger）
+```
+
+支持通过环境变量配置：`SECURITY_MAX_ROWS`、`SECURITY_TABLE_DENYLIST`、
+`SECURITY_TABLE_ALLOWLIST`、`SECURITY_AUDIT_LOG`、`SECURITY_AUDIT_LOG_FILE`。
+
+### 典型使用示例
+
+```python
+from agent.config import DatabaseConfig, SecurityConfig
+from agent.database import SQLDatabaseManager
+
+mgr = SQLDatabaseManager(
+    DatabaseConfig(uri="mysql+pymysql://readonly_user:pass@host/db"),
+    security_config=SecurityConfig(
+        table_denylist=["users", "auth_tokens"],
+        max_rows=500,
+        audit_log_file="logs/sql_audit.jsonl",
+    )
+)
+
+# execute_query 内部自动执行全套安全检查
+result = mgr.execute_query("SELECT * FROM orders")   # ✅ 通过
+result = mgr.execute_query("DROP TABLE orders")      # ❌ 抛出 SecurityViolationError
+```
+
+### 测试覆盖
+
+| 测试类 | 用例数 | 覆盖内容 |
+|--------|--------|----------|
+| `TestLayer1StatementType` | 14 | SELECT 放行、各类 DML/DDL 拦截、危险关键字、自定义允许列表 |
+| `TestLayer2TableAccess` | 8 | denylist/allowlist 精确匹配、大小写不敏感、JOIN 多表场景 |
+| `TestLayer3Complexity` | 6 | 长度拒绝、LIMIT 注入、LIMIT 降低、重写 SQL 合法性 |
+| `TestLayer4Sanitize` | 6 | 敏感列检测、无敏感列直通、多列报告、自定义模式 |
+| `TestValidationResult` | 3 | passed/layer/reason/rewritten_sql 字段 |
+| `TestAuditLog` | 9 | 记录积累、统计摘要、清空、文件写入、时间戳字段 |
+| `TestSecurityConfigFromEnv` | 5 | 默认值、环境变量覆盖 |
+| `TestSecurityViolationError` | 3 | 属性、字符串表示、继承链 |
+| `TestDatabaseManagerIntegration` | 7 | SQLite 集成、护栏拦截抛异常、LIMIT 透明注入 |
+| **合计** | **61** | **全部通过 ✅** |
+
+---
+
+## 13. 最终架构总览
 
 ```
 text2sql/
 ├── agent/
-│   ├── config.py              # AgentConfig / OutputConfig（支持 .env）
-│   ├── database.py            # SQLDatabaseManager + SchemaCache
+│   ├── config.py              # AgentConfig / OutputConfig / SecurityConfig（支持 .env）
+│   ├── database.py            # SQLDatabaseManager + SchemaCache + SecurityGuard 集成
+│   ├── security.py            # SQLSecurityGuard — 四层防御核心
 │   ├── tools.py               # SQLToolManager + CachedSchemaTool
 │   ├── skill_graph_builder.py # 主图 + 路由器
 │   ├── graph.py               # 统一入口
@@ -447,10 +572,10 @@ text2sql/
 │       ├── skill.py           # 7 步分析流程
 │       └── chart_generator.py # matplotlib PNG 图表生成
 │
-├── tests/                     # 95 个 Mock 测试 + Live 集成测试
+├── tests/                     # 156 个 Mock 测试 + Live 集成测试
 ├── report/                    # 分析报告输出目录
 │   └── charts/                # PNG 图表输出目录
-└── .env                       # 配置（DB_URI / API_KEY / REPORT_DIR 等）
+└── .env                       # 配置（DB_URI / API_KEY / REPORT_DIR / SECURITY_* 等）
 ```
 
 ### 核心数据流
@@ -477,7 +602,7 @@ Router（LLM 分类）
 
 ---
 
-## 13. 测试覆盖总结
+## 14. 测试覆盖总结
 
 ### 功能覆盖矩阵
 
@@ -487,6 +612,7 @@ Router（LLM 分类）
 | 列名模糊匹配 | ✅ 20 用例 | ✅ | 完备 |
 | 图表生成 | ✅ 30 用例 | - | 完备 |
 | 报告保存 | ✅ 32 用例 | ✅ | 完备 |
+| SQL 安全护栏 | ✅ 54 用例 | ✅ 7 用例 | 完备 |
 | 路由器准确率 | - | ✅ 15/15 | 完备 |
 | Simple Query E2E | - | ✅ | 人工验证 |
 | Complex Query E2E | - | ✅ | 人工验证 |
@@ -504,7 +630,10 @@ Router（LLM 分类）
 | Decimal 类型无法解析为图表 | `ast.literal_eval` 不支持 | 解析前正则预处理 |
 | Markdown 中图表不显示 | 文件路径而非图片语法 | 改为 `![title](charts/xxx.png)` |
 | 列名拼写错误导致 SQL 失败 | 自然语言列名与实际不符 | `difflib` 模糊匹配注入 fix prompt |
+| LLM 生成 DROP/DELETE 语句 | 无执行前拦截 | SQL 安全护栏 Layer 1 — sqlglot AST 分类 |
+| 查询返回过多行数 | 无行数限制 | SQL 安全护栏 Layer 3 — 自动注入/降低 LIMIT |
+| 敏感字段（密码/Token）裸露 | 无结果过滤 | SQL 安全护栏 Layer 4 — 敏感列检测 + ⚠️ 警告 |
 
 ---
 
-*生成时间：2026-04-10*
+*生成时间：2026-04-10 | 最后更新：2026-04-13（新增阶段十一：SQL 安全护栏）*

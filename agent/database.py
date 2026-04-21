@@ -12,8 +12,9 @@ from typing import Dict, List, Optional, Tuple
 
 from langchain_community.utilities import SQLDatabase
 
-from .config import DatabaseConfig
-from .types import DatabaseConnectionError, DatabaseDialect, QueryExecutionError
+from .config import DatabaseConfig, SecurityConfig
+from .security import SQLSecurityGuard, ValidationResult
+from .types import DatabaseConnectionError, DatabaseDialect, QueryExecutionError, SecurityViolationError
 
 
 logger = logging.getLogger(__name__)
@@ -113,19 +114,28 @@ class SchemaCache:
 
 
 class SQLDatabaseManager:
-    """管理 SQL 数据库连接和操作，内置 Schema 缓存。"""
+    """管理 SQL 数据库连接和操作，内置 Schema 缓存和安全护栏。"""
     
-    def __init__(self, config: DatabaseConfig, cache_ttl: int = 300) -> None:
+    def __init__(
+        self,
+        config: DatabaseConfig,
+        cache_ttl: int = 300,
+        security_config: Optional[SecurityConfig] = None,
+    ) -> None:
         """初始化数据库管理器。
         
         参数:
             config: 数据库配置
             cache_ttl: Schema 缓存 TTL（秒），默认 300 秒。设为 0 禁用缓存。
+            security_config: SQL 安全护栏配置。为 None 时禁用安全检查。
         """
         self.config = config
         self._db: Optional[SQLDatabase] = None
         self._dialect: Optional[DatabaseDialect] = None
         self.schema_cache = SchemaCache(ttl_seconds=cache_ttl) if cache_ttl > 0 else None
+        # 安全护栏（延迟初始化，等数据库方言确定后再设置 dialect）
+        self._security_config = security_config
+        self._guard: Optional[SQLSecurityGuard] = None
     
     @property
     def db(self) -> SQLDatabase:
@@ -146,6 +156,18 @@ class SQLDatabaseManager:
             )
             self._dialect = self._detect_dialect()
             logger.info(f"Successfully connected to {self._dialect.value} database")
+
+            # 方言确定后初始化安全护栏
+            if self._security_config is not None:
+                self._guard = SQLSecurityGuard(
+                    config=self._security_config,
+                    dialect=self._dialect.value,
+                )
+                logger.info(
+                    f"[SecurityGuard] Initialized with dialect={self._dialect.value}, "
+                    f"allowed={self._security_config.allowed_statements}, "
+                    f"max_rows={self._security_config.max_rows}"
+                )
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
             raise DatabaseConnectionError(f"Failed to connect to database: {e}") from e
@@ -174,6 +196,11 @@ class SQLDatabaseManager:
     def get_connection_string(self) -> str:
         """获取数据库连接字符串。"""
         return self.config.uri
+    
+    @property
+    def guard(self) -> Optional[SQLSecurityGuard]:
+        """返回当前安全护栏实例（未配置时为 None）。"""
+        return self._guard
     
     def get_dialect(self) -> DatabaseDialect:
         """获取数据库方言。"""
@@ -206,18 +233,53 @@ class SQLDatabaseManager:
     
     def execute_query(self, query: str) -> str:
         """执行 SQL 查询并返回结果。
+
+        在执行前通过安全护栏进行四层检查（如已配置）：
+        - Layer 1: 只允许 SELECT
+        - Layer 2: 表访问控制
+        - Layer 3: 强制 LIMIT
+        - Layer 4: 结果脱敏（事后）
         
         参数:
             query: 要执行的 SQL 查询
             
         返回:
             查询结果字符串
+            
+        异常:
+            SecurityViolationError: 查询被安全护栏拦截
+            QueryExecutionError: 查询执行失败
         """
+        # 安全检查（Layer 1-3）
+        if self._guard is not None:
+            validation: ValidationResult = self._guard.validate(query)
+            if not validation.passed:
+                raise SecurityViolationError(
+                    reason=validation.reason or "Security check failed",
+                    layer=validation.layer or "Unknown",
+                    sql=query,
+                )
+            # 使用可能被重写的 SQL（例如注入了 LIMIT）
+            safe_query = validation.rewritten_sql or query
+            if safe_query != query:
+                logger.info(
+                    f"[SecurityGuard] SQL rewritten by Layer 3: {safe_query!r}"
+                )
+        else:
+            safe_query = query
+
         try:
-            logger.debug(f"Executing query: {query}")
-            result = self.db.run(query)
+            logger.debug(f"Executing query: {safe_query}")
+            result = self.db.run(safe_query)
             logger.debug(f"Query executed successfully, result length: {len(str(result))}")
+
+            # Layer 4：结果脱敏
+            if self._guard is not None:
+                result = self._guard.sanitize_result(str(result), safe_query)
+
             return result
+        except SecurityViolationError:
+            raise
         except Exception as e:
             logger.error(f"Failed to execute query: {e}")
             raise QueryExecutionError(f"Failed to execute query: {e}") from e

@@ -13,9 +13,11 @@ from .skill_graph_builder import (
 )
 
 # Core components
-from .config import get_config, AgentConfig
+from .config import get_config, AgentConfig, SecurityConfig
 from .database import SQLDatabaseManager
 from .tools import SQLToolManager
+from .security import SQLSecurityGuard, ValidationResult
+from .types import SecurityViolationError
 
 # Legacy graph (backward compatibility) - lazy loading to avoid initialization on import
 _legacy_graph = None
@@ -52,6 +54,12 @@ __all__ = [
     # Core components
     "get_config",
     "AgentConfig",
+    "SecurityConfig",
     "SQLDatabaseManager",
     "SQLToolManager",
+    
+    # Security
+    "SQLSecurityGuard",
+    "ValidationResult",
+    "SecurityViolationError",
 ]
