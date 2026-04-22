@@ -12,6 +12,7 @@ Data Analysis Skill Implementation
 """
 
 import logging
+import csv
 import json
 import os
 import re
@@ -110,12 +111,13 @@ class DataAnalysisSkill(BaseSkill):
             insights: list
             visualizations: list
             chart_files: list   # paths to generated SVG chart files
+            export_files: list  # paths to exported CSV/Excel files
             report: str
             task_id: str        # session plan tracking
         
         graph = StateGraph(DataAnalysisState)
         
-        # Add 7 specialized nodes
+        # Add 8 specialized nodes
         graph.add_node("understand_goal", self._understand_goal)
         graph.add_node("explore_data", self._explore_data)
         graph.add_node("plan_analysis", self._plan_analysis)
@@ -123,6 +125,7 @@ class DataAnalysisSkill(BaseSkill):
         graph.add_node("analyze_results", self._analyze_results)
         graph.add_node("visualize", self._visualize)
         graph.add_node("generate_report", self._generate_report)
+        graph.add_node("export_results", self._export_results_node)
         
         # Build linear flow
         graph.add_edge(START, "understand_goal")
@@ -132,7 +135,8 @@ class DataAnalysisSkill(BaseSkill):
         graph.add_edge("generate_queries", "analyze_results")
         graph.add_edge("analyze_results", "visualize")
         graph.add_edge("visualize", "generate_report")
-        graph.add_edge("generate_report", END)
+        graph.add_edge("generate_report", "export_results")
+        graph.add_edge("export_results", END)
         
         return graph.compile()
     
@@ -764,6 +768,118 @@ Output as JSON ONLY:
             "report": report_content
         }
     
+    def _export_results_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Node 8: Export query results to CSV (and optionally Excel) files.
+
+        Each successful query result is written to its own CSV file in the
+        configured report directory.  If openpyxl is installed, an aggregated
+        Excel workbook (.xlsx) is also produced with one sheet per query.
+        """
+        logger.info("[DataAnalysis] Exporting query results")
+
+        query_results = state.get("query_results", [])
+        task_id = state.get("task_id", "")
+
+        # Resolve export directory (same as report dir)
+        report_dir = self._output_config.report_dir
+        if not os.path.isabs(report_dir):
+            skill_file = os.path.abspath(__file__)
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(skill_file)))
+            report_dir = os.path.join(project_root, report_dir)
+
+        os.makedirs(report_dir, exist_ok=True)
+
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix = f"export_{task_id or timestamp}"
+
+        export_files: list[str] = []
+
+        # ── per-query CSV ──────────────────────────────────────────────────
+        for idx, qr in enumerate(query_results, start=1):
+            if not qr.get("success"):
+                continue
+            raw = qr.get("result", "")
+            rows = self._parse_query_result(raw)
+            if not rows:
+                continue
+
+            csv_path = os.path.join(report_dir, f"{prefix}_step{idx}.csv")
+            try:
+                with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+                    writer = csv.writer(f)
+                    for row in rows:
+                        writer.writerow(row)
+                export_files.append(csv_path)
+                logger.info(f"[DataAnalysis] CSV exported: {csv_path}")
+            except Exception as e:
+                logger.warning(f"[DataAnalysis] Failed to write CSV step{idx}: {e}")
+
+        # ── aggregated Excel (optional, requires openpyxl) ─────────────────
+        try:
+            import openpyxl
+            wb = openpyxl.Workbook()
+            wb.remove(wb.active)  # remove default empty sheet
+            written = 0
+            for idx, qr in enumerate(query_results, start=1):
+                if not qr.get("success"):
+                    continue
+                raw = qr.get("result", "")
+                rows = self._parse_query_result(raw)
+                if not rows:
+                    continue
+                sheet_name = f"Step{idx}"
+                ws = wb.create_sheet(title=sheet_name)
+                for row in rows:
+                    ws.append(list(row))
+                written += 1
+            if written:
+                xlsx_path = os.path.join(report_dir, f"{prefix}.xlsx")
+                wb.save(xlsx_path)
+                export_files.append(xlsx_path)
+                logger.info(f"[DataAnalysis] Excel exported: {xlsx_path}")
+        except ImportError:
+            logger.debug("[DataAnalysis] openpyxl not installed; skipping Excel export")
+        except Exception as e:
+            logger.warning(f"[DataAnalysis] Failed to write Excel: {e}")
+
+        summary = f"导出了 {len(export_files)} 个文件到 {report_dir}" if export_files else "无可导出数据"
+        return {
+            "messages": [AIMessage(content=summary)],
+            "export_files": export_files,
+        }
+
+    def _parse_query_result(self, raw: str) -> list[list]:
+        """
+        Parse a raw SQL query result string into a list of rows (each row is a list).
+
+        Handles two common formats:
+        - LangChain SQLDatabase tuple strings: [(a, b), (c, d)]
+        - Tab/comma-separated plain text
+        """
+        if not raw or not raw.strip():
+            return []
+
+        stripped = raw.strip()
+
+        # Try as Python literal (list of tuples)
+        try:
+            import ast
+            parsed = ast.literal_eval(stripped)
+            if isinstance(parsed, list) and parsed:
+                return [list(row) if isinstance(row, (tuple, list)) else [row] for row in parsed]
+        except Exception:
+            pass
+
+        # Fall back to newline-separated rows
+        lines = [l for l in stripped.splitlines() if l.strip()]
+        if not lines:
+            return []
+        # Detect separator: tab first, then comma
+        sep = "\t" if "\t" in lines[0] else ","
+        return [line.split(sep) for line in lines]
+
     def _save_report(self, content: str) -> Optional[str]:
         """保存报告 Markdown 文件到配置的 report 目录，文件名含时间戳。"""
         import datetime

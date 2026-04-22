@@ -25,6 +25,9 @@ dependencies = [
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",

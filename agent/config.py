@@ -160,6 +160,26 @@ class RetrievalConfig:
 
 
 @dataclass
+class CacheConfig:
+    """LLM 响应缓存配置。
+
+    启用后，相同的 LLM 输入将直接命中本地 SQLite 缓存，
+    跳过网络请求，大幅降低延迟和 token 消耗。
+    """
+    enabled: bool = True
+    backend: str = "sqlite"          # 当前支持 "sqlite"
+    sqlite_path: str = ".langchain_cache.db"  # 缓存文件路径（相对项目根目录）
+
+    @classmethod
+    def from_env(cls) -> "CacheConfig":
+        return cls(
+            enabled=os.getenv("LLM_CACHE_ENABLED", "true").lower() == "true",
+            backend=os.getenv("LLM_CACHE_BACKEND", "sqlite"),
+            sqlite_path=os.getenv("LLM_CACHE_SQLITE_PATH", ".langchain_cache.db"),
+        )
+
+
+@dataclass
 class AgentConfig:
     """SQL Agent 的主配置类。"""
     
@@ -169,6 +189,7 @@ class AgentConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
+    cache: CacheConfig = field(default_factory=CacheConfig)
     
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "AgentConfig":
@@ -230,6 +251,7 @@ class AgentConfig:
             output=output_config,
             security=security_config,
             retrieval=RetrievalConfig.from_env(),
+            cache=CacheConfig.from_env(),
         )
     
     def validate(self) -> None:
