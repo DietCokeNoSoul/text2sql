@@ -12,13 +12,40 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "text2sql_columns"
 EMBEDDING_DIM = 384          # paraphrase-multilingual-MiniLM-L12-v2
 EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+
+# 模块级单例缓存：model_name → SentenceTransformer 实例
+# 避免每次创建 ColumnIndex 时重复加载（~5s 冷启动开销）
+_ENCODER_CACHE: dict[str, Any] = {}
+
+
+def _get_cached_encoder(model_name: str) -> Any:
+    """返回已缓存的 SentenceTransformer 实例，首次加载后复用。"""
+    if model_name in _ENCODER_CACHE:
+        return _ENCODER_CACHE[model_name]
+
+    import os
+    from sentence_transformers import SentenceTransformer
+    logger.info(f"[ColumnIndex] Loading embedding model: {model_name}")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    try:
+        encoder = SentenceTransformer(model_name, local_files_only=True)
+    except Exception:
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        logger.info("[ColumnIndex] Model not cached, downloading from HuggingFace...")
+        encoder = SentenceTransformer(model_name)
+
+    _ENCODER_CACHE[model_name] = encoder
+    logger.info(f"[ColumnIndex] Embedding model loaded and cached: {model_name}")
+    return encoder
 
 
 @dataclass
@@ -31,13 +58,15 @@ class ColumnRecord:
     text: str = ""           # 拼接后用于编码的文本
 
     def __post_init__(self) -> None:
-        samples_str = ", ".join(self.sample_values[:5]) if self.sample_values else ""
+        # Truncate each sample value to 60 chars to prevent oversized text fields
+        truncated = [s[:60] for s in self.sample_values[:3]]
+        samples_str = ", ".join(truncated) if truncated else ""
         self.text = (
             f"table: {self.table}  "
             f"column: {self.column}  "
             f"type: {self.data_type}  "
             f"samples: {samples_str}"
-        )
+        )[:400]  # Hard cap at 400 chars (safe for any Milvus byte/char counting)
 
     @property
     def id(self) -> int:
@@ -69,7 +98,6 @@ class ColumnIndex:
         self._port = milvus_port
         self._collection_name = collection_name
         self._embedding_model_name = embedding_model
-        self._encoder = None
         self._collection = None
         self._db_fingerprint: Optional[str] = None
 
@@ -78,25 +106,8 @@ class ColumnIndex:
     # ------------------------------------------------------------------
 
     def _get_encoder(self):
-        if self._encoder is None:
-            from sentence_transformers import SentenceTransformer
-            import os
-            logger.info(f"[ColumnIndex] Loading embedding model: {self._embedding_model_name}")
-            # Use local cache only — avoids network calls after first download
-            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-            os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            try:
-                self._encoder = SentenceTransformer(
-                    self._embedding_model_name, local_files_only=True
-                )
-            except Exception:
-                # Model not cached yet — fall back to online download (first-time setup)
-                os.environ.pop("TRANSFORMERS_OFFLINE", None)
-                os.environ.pop("HF_HUB_OFFLINE", None)
-                logger.info("[ColumnIndex] Model not cached, downloading from HuggingFace...")
-                self._encoder = SentenceTransformer(self._embedding_model_name)
-            logger.info("[ColumnIndex] Embedding model loaded")
-        return self._encoder
+        """返回 SentenceTransformer 实例（使用模块级单例，避免重复加载）。"""
+        return _get_cached_encoder(self._embedding_model_name)
 
     def _connect_milvus(self):
         from pymilvus import connections, Collection, utility
@@ -115,28 +126,44 @@ class ColumnIndex:
         connections.connect("default", host=self._host, port=str(self._port))
 
         if utility.has_collection(self._collection_name):
-            self._collection = Collection(self._collection_name)
-            self._collection.load()
-            logger.info(f"[ColumnIndex] Loaded existing collection '{self._collection_name}'")
-        else:
-            fields = [
-                FieldSchema(name="id",         dtype=DataType.INT64,        is_primary=True, auto_id=False),
-                FieldSchema(name="table_name", dtype=DataType.VARCHAR,      max_length=128),
-                FieldSchema(name="col_name",   dtype=DataType.VARCHAR,      max_length=128),
-                FieldSchema(name="data_type",  dtype=DataType.VARCHAR,      max_length=64),
-                FieldSchema(name="text",       dtype=DataType.VARCHAR,      max_length=512),
-                FieldSchema(name="embedding",  dtype=DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM),
-            ]
-            schema = CollectionSchema(fields, description="Text2SQL column index")
-            self._collection = Collection(self._collection_name, schema)
-
-            # Create HNSW index for fast ANN search
-            self._collection.create_index(
-                "embedding",
-                {"index_type": "HNSW", "metric_type": "COSINE", "params": {"M": 16, "efConstruction": 200}},
+            existing = Collection(self._collection_name)
+            # Auto-upgrade: drop collection if text field max_length is too small
+            text_field = next(
+                (f for f in existing.schema.fields if f.name == "text"), None
             )
-            self._collection.load()
-            logger.info(f"[ColumnIndex] Created collection '{self._collection_name}'")
+            if text_field and text_field.params.get("max_length", 0) < 1024:
+                logger.info(
+                    "[ColumnIndex] Collection schema outdated (max_length=%s < 1024), "
+                    "dropping for upgrade...",
+                    text_field.params.get("max_length"),
+                )
+                utility.drop_collection(self._collection_name)
+                # Fall through to create new collection below
+            else:
+                self._collection = existing
+                self._collection.load()
+                logger.info(f"[ColumnIndex] Loaded existing collection '{self._collection_name}'")
+                return self._collection
+
+        # Create new collection (either never existed or was just dropped for upgrade)
+        fields = [
+            FieldSchema(name="id",         dtype=DataType.INT64,        is_primary=True, auto_id=False),
+            FieldSchema(name="table_name", dtype=DataType.VARCHAR,      max_length=128),
+            FieldSchema(name="col_name",   dtype=DataType.VARCHAR,      max_length=128),
+            FieldSchema(name="data_type",  dtype=DataType.VARCHAR,      max_length=64),
+            FieldSchema(name="text",       dtype=DataType.VARCHAR,      max_length=1024),
+            FieldSchema(name="embedding",  dtype=DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM),
+        ]
+        schema = CollectionSchema(fields, description="Text2SQL column index")
+        self._collection = Collection(self._collection_name, schema)
+
+        # Create HNSW index for fast ANN search
+        self._collection.create_index(
+            "embedding",
+            {"index_type": "HNSW", "metric_type": "COSINE", "params": {"M": 16, "efConstruction": 200}},
+        )
+        self._collection.load()
+        logger.info(f"[ColumnIndex] Created collection '{self._collection_name}'")
 
         return self._collection
 
@@ -186,7 +213,7 @@ class ColumnIndex:
             [r.table for r in col_records],
             [r.column for r in col_records],
             [r.data_type for r in col_records],
-            [r.text[:512] for r in col_records],
+            [r.text[:400] for r in col_records],
             embeddings,
         ]
         collection.insert(data)

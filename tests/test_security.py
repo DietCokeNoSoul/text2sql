@@ -18,9 +18,6 @@ import sys
 import tempfile
 import unittest
 
-# Windows UTF-8 输出
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-
 # ---------------------------------------------------------------------------
 # 把项目根目录加入 sys.path
 # ---------------------------------------------------------------------------
@@ -558,6 +555,8 @@ class TestDatabaseManagerIntegration(unittest.TestCase):
 # ===========================================================================
 
 if __name__ == "__main__":
+    # Windows UTF-8 输出（仅直接运行时生效，不影响 pytest 收集）
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     print("=" * 72)
     print("  SQL SECURITY GUARDRAIL TESTS")
     print("=" * 72)

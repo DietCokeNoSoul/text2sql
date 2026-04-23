@@ -5,10 +5,11 @@
 
 import logging
 import re
+from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from langchain.chat_models import BaseChatModel
-from langchain.messages import AIMessage, AnyMessage, HumanMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 
 from agent.skills.base import BaseSkill
@@ -40,11 +41,12 @@ class SimpleQuerySkill(BaseSkill):
         """
         self.db_manager = db_manager
         
+        _md = Path(__file__).parent / "SKILL.md"
         super().__init__(
             name="simple_query",
             llm=llm,
             tool_manager=tool_manager,
-            description="处理单表或简单多表SQL查询"
+            skill_md_path=str(_md),
         )
     
     def _build_graph(self) -> StateGraph:
@@ -197,7 +199,7 @@ class SimpleQuerySkill(BaseSkill):
                 # 成功执行
                 logger.info("[SimpleQuery] Query executed successfully")
                 
-                from langchain.messages import ToolMessage
+                from langchain_core.messages import ToolMessage
                 tool_message = ToolMessage(
                     content=result,
                     tool_call_id=last_message.tool_calls[0].get("id", ""),
@@ -218,7 +220,7 @@ class SimpleQuerySkill(BaseSkill):
                 error_msg = str(exec_error)
                 logger.warning(f"[SimpleQuery] Query execution failed: {error_msg}")
                 
-                from langchain.messages import ToolMessage
+                from langchain_core.messages import ToolMessage
                 tool_message = ToolMessage(
                     content=f"Error: {error_msg}",
                     tool_call_id=last_message.tool_calls[0].get("id", ""),

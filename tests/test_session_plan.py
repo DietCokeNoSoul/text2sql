@@ -233,18 +233,18 @@ def test_plan_json_persists_across_manager_instances(two_step_plan, tmp_path):
 
 # ── Tests: data_analysis 7-step plan ──────────────────────────────────────────
 
-def test_data_analysis_seven_steps(pm):
+def test_data_analysis_eight_steps(pm):
     tid = pm.new_task_id()
     steps = [
         {"step_id": i, "description": f"Step {i}", "depends_on": [i - 1] if i > 1 else []}
-        for i in range(1, 8)
+        for i in range(1, 9)
     ]
     plan = pm.create_plan(tid, "Analysis", "Analyze sales", "data_analysis", steps)
-    assert len(plan.steps) == 7
+    assert len(plan.steps) == 8
     assert plan.skill == "data_analysis"
 
     # Simulate full run
-    for i in range(1, 8):
+    for i in range(1, 9):
         pm.update_step(tid, i, "in_progress")
         pm.update_step(tid, i, "done", result_summary=f"step {i} ok")
     pm.mark_complete(tid, success=True)

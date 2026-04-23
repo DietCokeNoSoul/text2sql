@@ -24,7 +24,7 @@ DB_URI = f"sqlite:///{os.path.abspath(DB_PATH)}"
 
 def _make_ai_response(content: str):
     """Wrap text in a LangChain AIMessage-compatible mock."""
-    from langchain.messages import AIMessage
+    from langchain_core.messages import AIMessage
     return AIMessage(content=content)
 
 
@@ -79,7 +79,7 @@ def plan_manager(sessions_dir):
 def db_and_tools():
     """Real SQLite DB manager + tool manager pointing at Chinook.db."""
     from unittest.mock import MagicMock
-    from langchain.chat_models import BaseChatModel
+    from langchain_core.language_models import BaseChatModel
     from agent.config import AgentConfig, DatabaseConfig, LLMConfig, OutputConfig, SecurityConfig, RetrievalConfig
     from agent.database import SQLDatabaseManager
     from agent.tools import SQLToolManager
@@ -109,7 +109,7 @@ def test_complex_skill_creates_plan_files(db_and_tools, plan_manager, sessions_d
       3. plan.md contains the question title
       4. Steps that were executed show 'done' status
     """
-    from langchain.messages import HumanMessage
+    from langchain_core.messages import HumanMessage
     from skills.complex_query.skill import ComplexQuerySkill
     from agent.tools import SQLToolManager
 
@@ -175,7 +175,7 @@ def test_complex_skill_creates_plan_files(db_and_tools, plan_manager, sessions_d
 
 def test_complex_skill_works_without_plan_manager(db_and_tools):
     """Skill should run normally when plan_manager is None (graceful degradation)."""
-    from langchain.messages import HumanMessage
+    from langchain_core.messages import HumanMessage
     from skills.complex_query.skill import ComplexQuerySkill
 
     db_manager, tool_manager = db_and_tools

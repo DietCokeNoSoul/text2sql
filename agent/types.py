@@ -7,8 +7,8 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Protocol, Union
 
-from langchain.messages import AnyMessage
-from langchain.tools import BaseTool
+from langchain_core.messages import AnyMessage
+from langchain_core.tools import BaseTool
 from langgraph.graph import MessagesState
 
 

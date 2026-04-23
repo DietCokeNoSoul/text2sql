@@ -6,8 +6,8 @@
 import logging
 from typing import Dict, List, Any, Callable
 
-from langchain.chat_models import BaseChatModel
-from langchain.messages import AIMessage, AnyMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, AnyMessage
 from langgraph.graph import MessagesState
 
 from ..tools import SQLToolManager

@@ -11,10 +11,11 @@ Plan-Execute pattern:
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from langchain.chat_models import BaseChatModel
-from langchain.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END, START, add_messages
 from langgraph.types import Send
 
@@ -52,11 +53,12 @@ class ComplexQuerySkill(BaseSkill):
         self._plan_manager = plan_manager
         self.simple_query_tool = None  # Will be set by main graph if needed
         
+        _md = Path(__file__).parent / "SKILL.md"
         super().__init__(
             name="complex_query",
             llm=llm,
             tool_manager=tool_manager,
-            description="处理需要多步骤分解的复杂查询（Plan-Execute模式）"
+            skill_md_path=str(_md),
         )
     
     def _build_graph(self) -> StateGraph:

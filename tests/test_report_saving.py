@@ -23,7 +23,6 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.config import AgentConfig, OutputConfig
@@ -41,6 +40,7 @@ def _make_skill(report_dir: str, chart_dir: str = None) -> DataAnalysisSkill:
     )
     skill.llm = MagicMock()
     skill.tool_manager = MagicMock()
+    skill._plan_manager = None
     return skill
 
 
@@ -305,6 +305,7 @@ class TestGenerateReportNode(unittest.TestCase):
         skill.llm = MagicMock()
         skill.llm.invoke.return_value = MagicMock(content=self.SAMPLE_REPORT)
         skill.tool_manager = MagicMock()
+        skill._plan_manager = None
         return skill
 
     def _make_state(self, chart_files=None):
@@ -383,6 +384,8 @@ class TestGenerateReportNode(unittest.TestCase):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run_all():
+    # Windows UTF-8 输出（仅直接运行时生效，不影响 pytest 收集）
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     print("=" * 70)
     print("  报告保存集成测试")
     print("=" * 70)

@@ -1,11 +1,16 @@
 """Skill 状态定义 - 各个 Skill 使用的 State 类。
 
 此模块定义了所有 Skill 使用的状态类，包括字段和类型注解。
+
+注意：
+- ComplexQueryState 被 skills/complex_query/skill.py 直接引用（作为 StateGraph 的 State）。
+- SimpleQueryState / DataAnalysisState 在各自 Skill 的 _build_graph() 中以 TypedDict 形式内联
+  重定义（与此处的 Pydantic BaseModel 版本并存）。此处保留用于类型提示和公共 API 导出。
 """
 
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
-from langchain.messages import AnyMessage
+from langchain_core.messages import AnyMessage
 
 
 # ============ Simple Query Skill State ============
@@ -123,7 +128,7 @@ class MainGraphState(BaseModel):
     messages: List[AnyMessage] = Field(default_factory=list)
     
     # 路由决策
-    query_type: str = ""  # "simple" | "complex" | "analysis"
+    query_type: str = ""  # "simple_query" | "complex_query" | "data_analysis"
     
     # Skill 执行结果
     skill_result: Optional[Any] = None

@@ -42,7 +42,7 @@ def print_message_history(messages):
             print(f"    {tool_info}")
     print("="*60 + "\n")
 
-def test_single_query(skill, query, test_name):
+def _run_single_query(skill, query, test_name):
     """测试单个查询并显示详细信息"""
     print("\n" + "="*80)
     print(f"测试: {test_name}")
@@ -85,7 +85,7 @@ def main():
     print("初始化完成！\n")
     
     # 只测试最关键的列名错误修复场景
-    test_single_query(
+    _run_single_query(
         skill,
         "查询商店的店名和评分，只显示前3个",
         "列名错误修复 (shop_name → name)"

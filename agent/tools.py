@@ -8,8 +8,8 @@ import logging
 from typing import List, Optional
 
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
-from langchain.chat_models import BaseChatModel
-from langchain.tools import BaseTool
+from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool
 from langgraph.prebuilt import ToolNode
 
 from .database import SQLDatabaseManager
@@ -91,9 +91,14 @@ class SQLToolManager:
         """创建 SQL 数据库工具集。"""
         try:
             logger.info("Creating SQL database toolkit")
+            # SQLDatabaseToolkit (Pydantic v2) requires a BaseChatModel, not a
+            # RunnableRetry wrapper. Unwrap if necessary.
+            llm_for_toolkit = self.llm
+            if not isinstance(llm_for_toolkit, BaseChatModel) and hasattr(llm_for_toolkit, "bound"):
+                llm_for_toolkit = llm_for_toolkit.bound
             self._toolkit = SQLDatabaseToolkit(
                 db=self.db_manager.db,
-                llm=self.llm
+                llm=llm_for_toolkit
             )
             self._tools = self._toolkit.get_tools()
             logger.info(f"Created toolkit with {len(self._tools)} tools")

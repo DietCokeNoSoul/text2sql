@@ -1,52 +1,42 @@
 # Simple Query Skill
 
-## 描述
-处理单表或简单多表 SQL 查询的 Skill。
+**处理单表或简单多表 SQL 查询的 Skill**
 
-## 能力
-- 📋 列出数据库表
-- 🔍 获取相关表结构
-- ✍️ 生成 SQL 查询
-- ✅ 验证查询正确性
-- ▶️ 执行查询并返回结果
+## 目的
 
-## 输入
-```yaml
-messages: 用户的查询请求
-  - "查询所有客户"
-  - "统计订单总数"
-  - "查找价格最高的产品"
-```
+处理可以用单条或少量 SQL 直接回答的查询问题，包含自动错误修复和列名模糊匹配。
 
-## 输出
-```yaml
-messages: 包含查询结果的消息历史
-query_result: SQL 查询结果
-```
+## 适用场景
 
-## 依赖
-- LLM: 用于生成和验证 SQL
-- SQLDatabaseToolkit: 数据库操作
-- CommonNodes: 复用公共节点 (list_tables, get_schema, execute_query)
+- 单表查询（列出、过滤、排序）
+- 简单的多表 JOIN
+- 聚合统计（COUNT / SUM / AVG / MAX / MIN）
+- 按条件筛选记录
+
+## 不适用场景
+
+- 需要分解为多个步骤的复杂查询（请使用 Complex Query Skill）
+- 需要趋势分析、洞察发现或可视化的问题（请使用 Data Analysis Skill）
 
 ## 流程
+
 ```
-START
-  ↓
-list_tables (复用)
-  ↓
-get_schema (复用)
-  ↓
-generate_query (特有节点)
-  ↓
-check_query (特有节点)
-  ↓
-run_query (复用)
-  ↓
-END
+list_tables → get_schema → generate_query → execute_query
+                                              ↓ 失败（最多3次）
+                                           fix_query → execute_query
 ```
 
+## 能力
+
+- 📋 自动列出数据库表
+- 🔍 获取相关表结构
+- ✍️ 生成 SQL 查询
+- 🔧 自动修复错误 SQL（最多重试3次）
+- 🔎 列名模糊匹配（自动建议相似列名）
+- ▶️ 执行查询并返回结果
+
 ## 示例
+
 ```python
 from skills.simple_query import SimpleQuerySkill
 
@@ -57,9 +47,3 @@ result = skill.invoke({
 print(result["messages"][-1].content)
 ```
 
-## 适用场景
-- ✅ 单表查询
-- ✅ 简单的多表 JOIN
-- ✅ 聚合统计 (COUNT, SUM, AVG)
-- ❌ 复杂的子查询（使用 Complex Query Skill）
-- ❌ 多步骤分析（使用 Data Analysis Skill）

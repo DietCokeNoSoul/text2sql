@@ -14,7 +14,6 @@ import sys
 import time
 import unittest
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.database import SchemaCache
@@ -148,6 +147,8 @@ class TestSchemaCacheIntegration(unittest.TestCase):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run_all():
+    # Windows UTF-8 输出（仅直接运行时生效，不影响 pytest 收集）
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     print("=" * 70)
     print("  Schema Cache 测试")
     print("=" * 70)

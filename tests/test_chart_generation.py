@@ -19,7 +19,6 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from skills.data_analysis.chart_generator import (
@@ -248,6 +247,7 @@ class TestVisualizeNode(unittest.TestCase):
         skill.db_manager = db_manager
         skill._output_config = cfg.output
         skill.name = "data_analysis"
+        skill._plan_manager = None
 
         return skill
 
@@ -367,6 +367,7 @@ class TestReportSaving(unittest.TestCase):
 
         skill = DataAnalysisSkill.__new__(DataAnalysisSkill)
         skill._output_config = OutputConfig(report_dir=report_dir, chart_dir=report_dir)
+        skill._plan_manager = None
         return skill
 
     def test_report_saved_to_custom_dir(self):
@@ -409,6 +410,7 @@ class TestReportSaving(unittest.TestCase):
 
         skill = DataAnalysisSkill.__new__(DataAnalysisSkill)
         skill._output_config = OutputConfig(report_dir="report", chart_dir="report/charts")
+        skill._plan_manager = None
 
         path = skill._save_report("# Default dir test")
         self.assertIsNotNone(path)
@@ -430,6 +432,8 @@ class TestReportSaving(unittest.TestCase):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run_all():
+    # Windows UTF-8 输出（仅直接运行时生效，不影响 pytest 收集）
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     print("=" * 70)
     print("  图表生成集成测试")
     print("=" * 70)

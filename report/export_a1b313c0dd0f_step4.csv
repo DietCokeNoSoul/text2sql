@@ -1,0 +1,9 @@
+﻿Error: (pymysql.err.ProgrammingError) (1111, 'Invalid use of group function')
+[SQL: SELECT 
+  YEARWEEK(create_time, 1) AS cohort_week,
+  MIN(YEARWEEK(create_time, 1)) AS first_cohort_week,
+  COUNT(*) AS n_users_in_cohort,
+  SUM(CASE WHEN YEARWEEK(create_time, 1) > MIN(YEARWEEK(create_time, 1)) THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS retention_rate
+FROM tb_blog
+GROUP BY user_id;]
+(Background on this error at: https://sqlalche.me/e/20/f405)

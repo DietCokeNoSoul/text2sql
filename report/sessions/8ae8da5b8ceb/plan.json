@@ -1,0 +1,34 @@
+{
+  "task_id": "8ae8da5b8ceb",
+  "title": "统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量",
+  "description": "统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量",
+  "skill": "complex_query",
+  "status": "done",
+  "created_at": "2026-04-23 17:23:07",
+  "updated_at": "2026-04-23 17:23:07",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "统计每家店铺的优惠券数量，并按数量降序排列，取前5名",
+      "status": "done",
+      "sql": "SELECT shop_id, COUNT(*) AS voucher_count FROM tb_voucher GROUP BY shop_id ORDER BY voucher_count DESC LIMIT 5",
+      "result_summary": "[(1, 2)]",
+      "error": "",
+      "started_at": "2026-04-23 17:23:07",
+      "completed_at": "2026-04-23 17:23:07",
+      "notes": ""
+    },
+    {
+      "step_id": 2,
+      "description": "获取前5名店铺的名称和优惠券数量，通过shop_id关联tb_shop表",
+      "status": "done",
+      "sql": "SELECT s.name, v.voucher_count FROM tb_shop s INNER JOIN (SELECT shop_id, COUNT(*) AS voucher_count FROM tb_voucher GROUP BY shop_id ORDER BY voucher_count DESC LIMIT 5) v ON s.id = v.shop_id",
+      "result_summary": "[('101茶餐厅', 2)]",
+      "error": "",
+      "started_at": "2026-04-23 17:23:07",
+      "completed_at": "2026-04-23 17:23:07",
+      "notes": ""
+    }
+  ],
+  "notes": []
+}

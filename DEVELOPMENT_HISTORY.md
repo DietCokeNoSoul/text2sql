@@ -27,6 +27,12 @@
 17. [最终架构总览](#17-最终架构总览)
 18. [测试覆盖总结](#18-测试覆盖总结)
 19. [功能流程详解](#19-功能流程详解)
+20. [阶段十六：工程质量优化](#20-阶段十六工程质量优化a3a4b4b5b6c1c2c3)
+21. [阶段十七：工程质量 & 功能补全](#21-阶段十七工程质量--功能补全a5a6a7b12b13c4c5)
+22. [阶段十八：工程质量补全](#22-阶段十八工程质量补全a8a9b14b15c6c7)
+23. [阶段十九：导入规范化补全](#23-阶段十九导入规范化补全a10a11b16c8)
+24. [阶段二十：SKILL.md 渐进式披露重构](#24-阶段二十skillmd-渐进式披露重构)
+25. [阶段二十一：测试体系完善与代码质量清理](#25-阶段二十一测试体系完善与代码质量清理)
 
 ---
 
@@ -1139,3 +1145,786 @@ SQL 输入（来自 LLM 生成）
 ```
 
 **异常类型**：违规时抛出 `SecurityViolationError(layer=1~4, reason=..., sql=...)`，Skill 可捕获后在修复流程中处理。
+
+---
+
+## 20. 阶段十六：工程质量优化（A3/A4/B4/B5/B6/C1/C2/C3）
+
+### 20.1 A3 — max_tokens 传入 LLM
+
+`_create_llm()` 现在将 `AgentConfig.max_tokens` 传递给 LLM 构造器：
+
+```python
+# agent/graph.py
+if cfg.max_tokens is not None:
+    kwargs["max_tokens"] = cfg.max_tokens
+
+llm = ChatTongyi(**kwargs)          # 或 init_chat_model(...)
+```
+
+环境变量：`LLM_MAX_TOKENS`（整数，默认不设上限）。
+
+---
+
+### 20.2 A4 — 补充 .env.example
+
+项目根目录新增 `.env.example`，包含 **30+ 个环境变量**，按类别分组并附带说明：
+
+| 类别 | 变量数 |
+|------|--------|
+| 数据库 | 2 |
+| LLM 模型 | 5 |
+| LLM 缓存 | 3 |
+| 安全护栏 | 5 |
+| 检索配置 | 7 |
+| 输出目录 | 2 |
+| 会话计划 | 2 |
+| 日志 | 1 |
+
+**使用方式：** `cp .env.example .env` 后填写必填项（`DB_URI`、`DASHSCOPE_API_KEY`）。
+
+---
+
+### 20.3 B4 — run_query 返回结构化结果
+
+`run_query()`、`run_query_streaming_async()`、`run_query_streaming()` 全部更改为返回 `dict`：
+
+```python
+{
+    "final_message": str,       # 最终 LLM 回答文本
+    "nodes_visited": list[str], # 按序执行的节点名列表
+    "export_files": list[str],  # 导出的 CSV/Excel 文件路径（DataAnalysis 才有）
+}
+```
+
+调用示例：
+```python
+result = run_query("查询各类音乐的销售额")
+print(result["final_message"])
+print("经过节点:", result["nodes_visited"])
+print("导出文件:", result["export_files"])
+```
+
+---
+
+### 20.4 B5 — LLM 调用自动重试
+
+网络抖动或 LLM 临时服务错误时自动指数退避重试，最多 3 次：
+
+```python
+# agent/graph.py
+_base_llm = _create_llm(config.llm)
+llm = _base_llm.with_retry(stop_after_attempt=3, wait_exponential_jitter=True)
+```
+
+使用 LangChain Runnable 内置的 `with_retry()`，底层依赖 `tenacity`（已作为传递依赖安装），无需额外配置。
+
+---
+
+### 20.5 B6 — openpyxl 加入依赖
+
+`pyproject.toml` 新增：
+
+```toml
+"openpyxl>=3.1"
+```
+
+B3 导出节点的 Excel 生成路径现已稳定可用（之前 openpyxl 缺失时会静默跳过）。
+
+---
+
+### 20.6 C1 — B2/B3 自动化测试
+
+新增 `tests/test_cache_and_export.py`（18 个测试，全部通过 ✅）：
+
+| 测试类 | 用例数 | 覆盖内容 |
+|--------|--------|----------|
+| `TestLLMCacheConfig` | 4 | `CacheConfig` 默认值 / `from_env()` 覆盖 |
+| `TestSQLiteCacheIntegration` | 2 | `SQLiteCache` 初始化 / 路径传递 |
+| `TestParseQueryResult` | 4 | tuple / CSV / tab / 空字符串格式 |
+| `TestExportResultsNode` | 6 | CSV 写入 / Excel 生成 / 文件路径返回 |
+| `TestRunQueryReturnType` | 2 | `run_query` 返回 dict / 含必需 key |
+
+同步新增 `tests/conftest.py`，将项目根目录加入 `sys.path`，解决测试中 `ModuleNotFoundError: No module named 'agent'` 问题。
+
+---
+
+### 20.7 C2 — SentenceTransformer 单例缓存
+
+`agent/column_index.py` 引入模块级模型缓存，避免每次构建 `ColumnIndex` 时重复加载 ~100MB 模型权重：
+
+```python
+_ENCODER_CACHE: dict[str, Any] = {}
+
+def _get_cached_encoder(model_name: str) -> Any:
+    if model_name not in _ENCODER_CACHE:
+        from sentence_transformers import SentenceTransformer
+        _ENCODER_CACHE[model_name] = SentenceTransformer(model_name)
+    return _ENCODER_CACHE[model_name]
+```
+
+`ColumnIndex._get_encoder()` 改为调用 `_get_cached_encoder(self._model_name)`，多次实例化 `ColumnIndex` 只加载一次模型。
+
+---
+
+### 20.8 C3 — README 同步更新
+
+`README.md` 本次同步更新内容：
+
+| 章节 | 更新内容 |
+|------|----------|
+| 功能特性 | 新增流式输出、LLM 缓存、自动重试、结果导出、双塔检索、会话计划追踪 |
+| 快速开始 | 安装改为 `uv sync`，新增 `.env.example` 引用，代码示例改为结构化 dict 返回 |
+| 项目结构 | 补充所有新文件（column_index / schema_graph / retrieval / session_plan 等） |
+| 新功能说明 | 新增独立章节：流式输出 / LLM 缓存 / 查询导出 / 双塔检索 / 会话计划追踪 |
+| 测试 | 更新为 `pytest` 命令，新增 `test_cache_and_export.py` |
+| 技术栈 | 新增 Milvus / NetworkX / SentenceTransformer / openpyxl 行 |
+| 配置项 | 补充 `LLM_MAX_TOKENS` / `LLM_CACHE_*` / `MILVUS_*` 变量，引用 `.env.example` |
+
+---
+
+
+---
+
+## 21. 阶段十七：工程质量 & 功能补全（A5/A6/A7/B12/B13/C4/C5）
+
+### 21.1 A5 — requirements.txt 同步 pyproject.toml
+
+`requirements.txt` 与 `pyproject.toml` 严重脱节（前者仅 9 包，后者 13 包），
+本次全量对齐，确保两者版本约束一致，新增以下依赖：
+
+| 新增包 | 用途 |
+|--------|------|
+| `networkx>=3.4` | Steiner 树剪枝（双塔检索） |
+| `pymilvus>=2.4` | 向量数据库客户端 |
+| `sentence-transformers>=3.0` | 语义编码器 |
+| `openpyxl>=3.1` | Excel 文件导出 |
+| `sqlglot>=30.4.2` | SQL 解析与方言转换 |
+| `torch>=2.0` | SentenceTransformer 后端 |
+
+同时移除已不再使用的 `langchain-deepseek`（由 `dashscope` 直接对接）。
+
+### 21.2 A6 — pyproject.toml 项目描述
+
+`description` 字段从占位符 `"Add your description here"` 更新为准确描述：
+
+```
+Text-to-SQL LangGraph agent with skill-based architecture (Simple/Complex/DataAnalysis),
+dual-tower retrieval, streaming output, and LLM response caching
+```
+
+### 21.3 A7 — 清理 ColumnIndex 死代码
+
+`ColumnIndex.__init__` 中遗留的 `self._encoder = None` 属于死代码：
+`_get_encoder()` 方法从未读取该实例变量，始终直接调用模块级单例 `_get_cached_encoder()`。
+移除该赋值，消除潜在的混淆。
+
+### 21.4 B12 — DataAnalysis 全量 SessionPlanManager 集成（含 Step 8）
+
+DataAnalysis 技能原有 7 步会话计划追踪（步骤 1–7），但 `_export_results_node`（步骤 8）
+未被纳入，且 `mark_complete` 误置于 `_generate_report` 节点中，导致任务在报告生成后
+就被标记为完成，而非在文件真正导出后。
+
+本次修复：
+
+| 变更 | 位置 |
+|------|------|
+| 在 `_understand_goal` 的步骤列表中追加 Step 8 | `_understand_goal` |
+| `_export_results_node` 开头调用 `_step_start(state, 8)` | `_export_results_node` |
+| 函数返回前调用 `_step_done(state, 8, summary)` | `_export_results_node` |
+| 将 `mark_complete` 从 `_generate_report` 移至 `_export_results_node` | 两处 |
+
+现在会话计划文件（`report/<task_id>/plan.md`）完整记录 8 个步骤的执行状态。
+
+### 21.5 B13 — 流式模式补全 export_files
+
+`run_query_streaming_async` 使用 `astream_events` API，该 API 只推送事件，
+不携带最终图状态，导致 `export_files` 始终返回空列表 `[]`。
+
+**修复方案**：流式循环结束后，调用 `await graph.aget_state(config_with_thread)` 
+取回最终快照，再从 `snapshot.values` 中提取 `export_files`：
+
+```python
+snapshot = await graph.aget_state(config_with_thread)
+if snapshot:
+    export_files = snapshot.values.get("export_files", [])
+```
+
+DataAnalysis 的流式模式现在也能正确返回导出文件路径列表。
+
+### 21.6 C4 — dual_tower_retrieve 节点集成测试
+
+新增 `tests/test_dual_tower_node.py`，包含 4 个测试用例：
+
+| 用例 | 验证内容 |
+|------|---------|
+| `test_pruned_schema_replaces_table_schema` | pruned_schema 正确覆盖 state 中的 table_schema |
+| `test_retrieval_stats_populated` | retrieval_stats 包含所有预期统计字段 |
+| `test_graceful_fallback_on_retriever_error` | 检索异常时安全降级，保留 full schema |
+| `test_empty_messages_does_not_crash` | messages 为空时不崩溃，以空字符串调用 retrieve |
+
+所有 4 个测试均以 mock 模式运行，无需真实 Milvus 连接，执行速度快（~3s）。
+
+### 21.7 C5 — main.py 模块文档注释
+
+`main.py` 原先仅有单行注释。本次补充完整的模块级 docstring，涵盖：
+- 使用方式（命令行启动）
+- `run_query` / `run_query_streaming` 返回字典结构说明
+- 三种技能（简单查询 / 复杂查询 / 数据分析）的功能概述
+
+---
+
+
+*最后更新：全部 14 项优化任务完成（A3–A7 / B4–B13 / C1–C5）*
+
+---
+
+## 22. 阶段十八：工程质量补全（A8/A9/B14/B15/C6/C7）
+
+### 22.1 A8 — 修复 test_session_plan 8 步计划测试
+
+B12 将 DataAnalysis 从 7 步升级为 8 步后，`test_data_analysis_seven_steps` 已与实现不符。
+将测试函数重命名为 `test_data_analysis_eight_steps`，步骤范围改为 1–8，断言同步修正。
+
+### 22.2 A9 — skill_graph_builder 规范化消息导入
+
+```python
+# 旧（已弃用路径）
+from langchain.messages import AIMessage, HumanMessage, SystemMessage
+# 新（规范路径）
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+```
+
+### 22.3 B14 — 路由器取最新用户消息
+
+`_query_router_node` 原先只取 `messages[0]`，在多轮对话中会误用第一轮问题做分类。
+修复为：逆序遍历 messages，取最后一条 `HumanMessage`；无 HumanMessage 时回退到首条消息。
+
+```python
+for msg in reversed(messages):
+    if hasattr(msg, "type") and msg.type == "human":
+        user_question = msg.content
+        break
+```
+
+### 22.4 B15 — format_for_llm 增加 in_progress 区块
+
+`SessionPlanManager.format_for_llm` 原先只输出 done / pending / failed 三个区块，
+`in_progress` 步骤完全静默，LLM 无法感知哪一步正在执行。
+新增 `### [running] 执行中步骤` 区块，同时显示步骤开始时间，帮助 LLM 理解当前执行位置。
+
+### 22.5 C6 — 新建 test_placeholder_resolver.py
+
+`_resolve_query_placeholders` 是复杂的 SQL 占位符替换逻辑，包含：
+- 元组列表 / 标量列表 / 字符串（ast.literal_eval）三条解析路径
+- 空结果 / 缺失步骤 / 解析失败三种 (NULL) 降级路径
+- 多依赖链同时替换
+
+新增 9 个单元测试，全部通过（含边界用例 `test_unrelated_placeholder_not_replaced`
+验证 depends_on 范围约束正确）。
+
+### 22.6 C7 — test_router_accuracy 移除硬编码路径
+
+原文件顶部含硬编码 `sys.path.insert(0, r"c:\Users\71949\Desktop\text2sql")`，
+不可移植且与 conftest.py 自动注入的路径冲突。
+移除该行，与其余测试文件保持一致的路径管理规范。
+
+---
+
+*最后更新：全部 20 项优化任务完成（A3–A9 / B4–B15 / C1–C7）*
+
+---
+
+## 23. 阶段十九：导入规范化补全（A10/A11/B16/C8）
+
+### 背景
+
+在全局导入路径规范化（A3 阶段）之后，仍有少量遗留的 `from langchain.messages import ...` 分散在技能实现文件和测试文件中，以及一个文档中错误的步骤数说明，以及多轮对话场景下 `_understand_goal` 节点读取错误消息的 Bug。
+
+---
+
+### 23.1 A10 — 全局导入批量规范化（生产代码）
+
+**目标**：将所有生产代码中剩余的 `from langchain.messages import ...`、`from langchain.tools import BaseTool`、`from langchain.chat_models import BaseChatModel` 替换为对应的 `langchain_core.*` 路径。
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `skills/data_analysis/skill.py` | `HumanMessage, AIMessage, SystemMessage` → `langchain_core.messages` |
+| `skills/simple_query/skill.py` | 顶层导入 + 两处函数体内 `ToolMessage` 内联导入 → `langchain_core.messages` |
+| `skills/complex_query/skill.py` | `HumanMessage, AIMessage` → `langchain_core.messages` |
+| `agent/tools.py` | `BaseChatModel`, `BaseTool` → `langchain_core.*` |
+| `agent/types.py` | `AnyMessage`, `BaseTool` → `langchain_core.*` |
+| `agent/nodes/common.py` | `BaseChatModel`, `HumanMessage`, `AIMessage` → `langchain_core.*` |
+| `agent/skills/states.py` | `AnyMessage` → `langchain_core.messages` |
+| `agent/skills/base.py` | `BaseChatModel` → `langchain_core.language_models` |
+
+> **注意：** `agent/graph.py` 中的 `from langchain.chat_models import init_chat_model` **保持不变**——`init_chat_model` 是 `langchain` 包的便捷函数，不在 `langchain_core` 中。
+
+---
+
+### 23.2 A11 — DataAnalysis 模块文档步骤数修正
+
+**问题：** `skills/data_analysis/skill.py` 顶部 docstring 描述的是 7 步流程，但实际实现已包含第 8 步（`export_results`），步骤数不一致。
+
+**修改：**
+```python
+# 修改前
+"""DataAnalysisSkill — 7 步数据分析 Skill"""
+
+# 修改后
+"""DataAnalysisSkill — 8 步数据分析 Skill
+步骤：understand_goal → explore_data → plan_analysis → generate_queries →
+      analyze_results → visualize → generate_report → export_results
+"""
+```
+
+---
+
+### 23.3 B16 — `_understand_goal` 多轮对话消息读取修复
+
+**问题：** `DataAnalysisSkill._understand_goal` 节点总是读取 `messages[0].content`，在多轮对话中只能读到首条消息，而非用户最新输入。
+
+**修复方案**（与 B14 对 `_query_router_node` 的修复保持一致）：
+```python
+# 修改前
+latest_message = messages[0].content
+
+# 修改后：反向遍历找到最新的 HumanMessage
+user_message = messages[0].content  # fallback
+for msg in reversed(messages):
+    if isinstance(msg, HumanMessage):
+        user_message = msg.content
+        break
+```
+
+---
+
+### 23.4 C8 — 测试文件导入规范化
+
+**目标：** 将测试文件中所有 `from langchain.messages import ...` 替换为 `from langchain_core.messages import ...`。
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `tests/test_router_accuracy.py` | 顶层 `HumanMessage` 导入 |
+| `tests/test_main_graph.py` | 顶层 `HumanMessage` 导入 |
+| `tests/test_simple_skill.py` | 顶层导入 + 函数体内内联导入 |
+| `tests/test_session_plan_integration.py` | 三处函数体内内联导入（`AIMessage` × 1，`HumanMessage` × 2） |
+| `tests/test_column_fuzzy_match.py` | 四处函数体内内联导入（`AIMessage` × 3，`HumanMessage` × 2，组合导入 × 1） |
+
+**验证：** 完成后使用 `grep -r "from langchain\.messages import"` 全项目扫描，结果为零匹配。
+
+---
+
+*最后更新：全部 24 项优化任务完成（A3–A11 / B4–B16 / C1–C8）*
+
+---
+
+## 24. 阶段二十：SKILL.md 渐进式披露重构
+
+### 背景
+
+#### 改前问题
+
+在早期设计中，`SKILL.md` 文件仅作为开发者文档存在，**从未被任何 Python 代码读取或使用**。真正的技能路由描述被硬编码在 `skill_graph_builder.py` 的一个大段字符串常量中：
+
+```python
+# 改前（skill_graph_builder.py）— 硬编码路由提示
+system_prompt = """你是一个查询意图分类器。根据用户问题选择合适的技能：
+
+simple_query: 处理简单单表查询...
+complex_query: 处理复杂多步骤查询...
+data_analysis: 进行深度数据分析...
+"""
+```
+
+同时，`SkillRegistry` 虽然已定义，但完全未被 `skill_graph_builder.py` 使用；主图每次初始化时分别 `import` 三个 Skill，使用各自独立的节点方法（`_simple_skill_node`、`_complex_skill_node`、`_analysis_skill_node`）。
+
+**核心痛点：**
+1. 添加新 Skill 需要改动 4 处：新建文件、在 `__init__` 导入、添加节点方法、更新路由提示字符串
+2. SKILL.md 是纯装饰品，开发者写了也没有实际作用
+3. 路由器 LLM 在分类阶段看到所有细节描述，Token 浪费
+
+#### 改后目标
+
+将 SKILL.md 提升为 **运行时元数据**，实现"渐进式披露"（Progressive Disclosure）：
+
+- **路由阶段**：LLM 只看 `## 目的` + `## 适用场景` 两节摘要（来自 SKILL.md）
+- **执行阶段**：LLM 才获得完整工具列表（在各 Skill 子图内部）
+
+---
+
+### 24.1 统一三份 SKILL.md 格式（D1）
+
+**改前：** 三份 SKILL.md 语言混用（英文/中文），章节结构不统一，无统一标准。
+
+**改后：** 全部重写为中文，统一结构：
+
+```markdown
+## 目的
+（一句话描述该 Skill 的用途）
+
+## 适用场景
+- 场景 1
+- 场景 2
+...
+
+## 不适用场景
+- ...
+```
+
+**涉及文件：**
+- `skills/simple_query/SKILL.md`
+- `skills/complex_query/SKILL.md`
+- `skills/data_analysis/SKILL.md`
+
+---
+
+### 24.2 BaseSkill 自动加载 SKILL.md（D2）
+
+**改前：** `BaseSkill.__init__` 只接受手动传入的 `description` 字符串参数。
+
+**改后：** 新增 `skill_md_path` 参数 + `_extract_skill_description()` 模块级函数，自动从 SKILL.md 解析 `目的` 和 `适用场景` 两节并合并为 `description`。
+
+```python
+# 改前
+class BaseSkill:
+    def __init__(self, name, llm, tool_manager, description=""):
+        self.description = description
+
+# 改后
+def _extract_skill_description(skill_md_path: str) -> str:
+    """解析 SKILL.md，提取 '目的' 和 '适用场景' 两节。"""
+    ...
+
+class BaseSkill:
+    def __init__(self, name, llm, tool_manager, description="", skill_md_path=None):
+        if skill_md_path and not description:
+            description = _extract_skill_description(skill_md_path)
+        self.description = description
+```
+
+**涉及文件：** `agent/skills/base.py`
+
+---
+
+### 24.3 SkillRegistry 新增 build_router_prompt()（D3）
+
+**改前：** `SkillRegistry` 仅提供 `register()`、`get()` 等基本操作，没有格式化路由提示的能力。
+
+**改后：** 新增 `build_router_prompt()` 方法，将所有注册技能的 `description` 格式化为结构化提示块：
+
+```
+【simple_query】
+**目的**
+处理能用单条 SQL 直接回答的查询问题...
+
+**适用场景**
+- 单表查询（含聚合、筛选）
+...
+
+【complex_query】
+...
+```
+
+**涉及文件：** `agent/skills/registry.py`
+
+---
+
+### 24.4 三个 Skill 传递 skill_md_path（D4）
+
+**改前：** 各 Skill 的 `__init__` 传入硬编码的 `description="..."` 字符串。
+
+**改后：** 删除硬编码字符串，改为传入 SKILL.md 路径：
+
+```python
+# 改前
+super().__init__(
+    name="simple_query",
+    description="处理简单查询...",  # 硬编码
+    ...
+)
+
+# 改后
+_md = Path(__file__).parent / "SKILL.md"
+super().__init__(
+    name="simple_query",
+    skill_md_path=str(_md),  # 运行时读取
+    ...
+)
+```
+
+**涉及文件：**
+- `skills/simple_query/skill.py`
+- `skills/complex_query/skill.py`
+- `skills/data_analysis/skill.py`
+
+---
+
+### 24.5 SkillGraphBuilder Registry 驱动重构（D5）
+
+**改前：** `SkillGraphBuilder` 三个 Skill 各自独立 import、独立节点方法、硬编码路由提示、硬编码条件边映射。
+
+**改后：** 完全由 `SkillRegistry` 驱动，动态注册节点和路由：
+
+| 对比项 | 改前 | 改后 |
+|--------|------|------|
+| 节点注册 | `_simple_skill_node` / `_complex_skill_node` / `_analysis_skill_node` 三个独立方法 | `_make_skill_node(skill)` 工厂函数，一次生成 |
+| 节点名称 | `"simple_skill"` / `"complex_skill"` / `"analysis_skill"` | `"simple_query"` / `"complex_query"` / `"data_analysis"`（与 Skill.name 一致） |
+| 条件边 | 硬编码 `{"simple": "simple_skill", ...}` | `{name: name for name in registry.list_skills()}` |
+| 路由提示 | 硬编码字符串 | `registry.build_router_prompt()`（来自 SKILL.md） |
+| 添加新 Skill | 改动 4 处 | 只需 `registry.register(new_skill)` 1 处 |
+
+**⚠️ 注意（Breaking Change）：**  
+节点名称已从 `"simple_skill"` → `"simple_query"` 等（与 Skill 名保持一致），`query_type` 字段值也随之变化。
+
+---
+
+### 本轮改动总结
+
+| 文件 | 改动说明 |
+|------|----------|
+| `skills/*/SKILL.md` | 重写为中文统一格式 |
+| `agent/skills/base.py` | 新增 `_extract_skill_description()` + `skill_md_path` 参数 |
+| `agent/skills/registry.py` | 新增 `build_router_prompt()` 方法 |
+| `skills/*/skill.py` | 替换硬编码 `description` 为 `skill_md_path` |
+| `agent/skill_graph_builder.py` | Registry 驱动重构，动态节点/边/提示 |
+
+**效果：**
+- SKILL.md 从纯文档 → 运行时路由元数据
+- SkillRegistry 从未使用 → 主图核心依赖
+- 新增 Skill 成本：4 处手动改动 → 1 次 `register()` 调用
+- 路由 LLM Token 消耗减少（只看摘要，不看工具细节）
+
+---
+
+## 25. 阶段二十一：测试体系完善与代码质量清理
+
+### 背景
+
+D5 重构后遗留以下工程质量问题：
+1. **测试回归**：`DataAnalysisSkill` 测试用 `__new__` 绕过 `__init__`，D5 新增的 `_plan_manager` 属性未被初始化，导致 `test_chart_generation` 和 `test_report_saving` 的 36 个测试失败
+2. **pytest 不兼容**：5 个测试文件在模块级调用 `sys.stdout = io.TextIOWrapper(...)`, pytest 收集阶段就触发 `I/O operation on closed file`
+3. **空占位文件**：`agent/graph_builder.py`、`agent/nodes.py`（旧架构遗留空壳），以及 `tests/` 下 5 个 0 字节占位文件混淆目录
+4. **缺少核心逻辑测试**：D2/D3 引入的 `_extract_skill_description()` 和 `build_router_prompt()` 没有任何单元测试
+5. **测试总数统计陈旧**：`tests/__init__.py` 中 "184 个" 的数字远低于实际
+
+---
+
+### 25.1 D5 回归修复（测试 `__new__` 缺漏 `_plan_manager`）
+
+**改前问题：**
+
+```python
+# 测试中绕过 __init__ 创建对象，遗漏了 D5 新增的实例变量
+skill = DataAnalysisSkill.__new__(DataAnalysisSkill)
+# 缺少：skill._plan_manager = None
+# 导致：AttributeError: 'DataAnalysisSkill' object has no attribute '_plan_manager'
+```
+
+**修复方案：** 在所有使用 `__new__` 方式构建 `DataAnalysisSkill` 的地方手动补上 `skill._plan_manager = None`。
+
+**影响文件：**
+
+| 文件 | 修复位置数 |
+|------|-----------|
+| `tests/test_chart_generation.py` | 3 处（`_make_analysis_skill`、`_make_skill_with_dir`、`test_default_report_dir_resolves_to_project_root`） |
+| `tests/test_report_saving.py` | 2 处（`_make_skill`、`_make_skill_with_outdir`） |
+
+**恢复测试：** 36 个单元测试重新通过。
+
+---
+
+### 25.2 T1 — pytest 兼容性修复
+
+**改前问题：**
+
+5 个测试文件在模块顶层执行：
+
+```python
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+```
+
+pytest 导入模块时就会执行这一行，替换掉 pytest 自己的 stdout capture 机制，导致后续所有输出抛出 `ValueError: I/O operation on closed file`。
+
+**修复方案：** 将该行从模块顶层移入 `run_all()` 函数（或 `if __name__ == "__main__":` 块）内部，仅在直接运行文件时才生效，pytest 收集时不受影响。
+
+**影响文件：**
+
+| 文件 | 修复位置 |
+|------|---------|
+| `tests/test_schema_cache.py` | 移入 `run_all()` 开头 |
+| `tests/test_security.py` | 移入 `if __name__ == "__main__":` 块开头 |
+| `tests/test_column_fuzzy_match.py` | 移入 `run_all()` 开头 |
+| `tests/test_report_saving.py` | 移入 `run_all()` 开头 |
+| `tests/test_chart_generation.py` | 移入 `run_all()` 开头 |
+
+---
+
+### 25.3 T2 — 填充空文件 `tests/test_import.py`
+
+**改前：** 0 字节占位文件，pytest 收集时产生无用警告。
+
+**改后：** 11 个冒烟测试，验证所有核心符号可被正确导入：
+
+| 测试 | 验证符号 |
+|------|---------|
+| `test_skill_graph_builder` | `agent.skill_graph_builder.SkillBasedGraphBuilder` |
+| `test_base_skill` | `agent.skills.base.BaseSkill` |
+| `test_extract_skill_description` | `agent.skills.base._extract_skill_description` |
+| `test_skill_registry` | `agent.skills.registry.SkillRegistry` |
+| `test_simple_query_skill` | `skills.simple_query.skill.SimpleQuerySkill` |
+| `test_complex_query_skill` | `skills.complex_query.skill.ComplexQuerySkill` |
+| `test_data_analysis_skill` | `skills.data_analysis.skill.DataAnalysisSkill` |
+| `test_agent_config` | `agent.config.AgentConfig / DatabaseConfig / OutputConfig` |
+| `test_database_manager` | `agent.database.SQLDatabaseManager / SchemaCache` |
+| `test_sql_security_guard` | `agent.database.SQLSecurityGuard` |
+| `test_states` | `agent.skills.states.MainGraphState` |
+
+---
+
+### 25.4 T3 — 新建 `tests/test_skill_registry.py`
+
+新增 15 个单元测试，覆盖 D2/D3 引入的两个核心函数：
+
+**`TestExtractSkillDescription`（8 例）：**
+
+| 用例 | 场景 |
+|------|------|
+| `test_extracts_purpose_and_scenarios` | 正常 SKILL.md，两节均提取 |
+| `test_missing_file_returns_empty_string` | 文件不存在 → 返回 `""` |
+| `test_md_without_target_sections_returns_empty` | 只有 `## 流程` 等无关章节 → `""` |
+| `test_only_purpose_section_present` | 只有 `## 目的` → 只输出目的块 |
+| `test_only_scenarios_section_present` | 只有 `## 适用场景` → 只输出场景块 |
+| `test_real_simple_query_skill_md` | 真实文件 smoke test |
+| `test_empty_file_returns_empty` | 空文件 → `""` |
+| `test_section_with_only_whitespace_is_excluded` | 章节体全为空白 → 该节不出现在输出中 |
+
+**`TestBuildRouterPrompt`（7 例）：**
+
+| 用例 | 场景 |
+|------|------|
+| `test_empty_registry_returns_empty_string` | 空注册中心 → `""` |
+| `test_single_skill_produces_block` | 单 Skill → 含 `【skill_name】` 块 |
+| `test_multiple_skills_all_present` | 多 Skill → 每个都出现 |
+| `test_skill_with_empty_description_uses_fallback` | description="" → fallback `"Skill: name"` |
+| `test_skill_with_none_description_uses_fallback` | description=None → fallback |
+| `test_blocks_separated_by_double_newline` | 块间以 `\n\n` 分隔 |
+| `test_unregister_removes_from_prompt` | unregister 后该 Skill 不再出现 |
+
+---
+
+### 25.5 O1/O2 — 导入路径规范化补漏
+
+在全局导入规范化（A10/C8）之后，还有两处遗漏：
+
+| 文件 | 改前 | 改后 |
+|------|------|------|
+| `agent/skill_graph_builder.py` | `from langchain.chat_models import BaseChatModel` | `from langchain_core.language_models import BaseChatModel` |
+| `tests/test_session_plan_integration.py` | `from langchain.chat_models import BaseChatModel` | `from langchain_core.language_models import BaseChatModel` |
+
+---
+
+### 25.6 O3 — states.py `query_type` 注释更新
+
+**改前：**
+```python
+query_type: str = ""  # "simple" | "complex" | "analysis"
+```
+
+**改后（与 D5 节点名对齐）：**
+```python
+query_type: str = ""  # "simple_query" | "complex_query" | "data_analysis"
+```
+
+---
+
+### 25.7 O4 — states.py 死代码调查与注释
+
+`states.py` 中定义了三个 Pydantic State 类（`SimpleQueryState`、`ComplexQueryState`、`DataAnalysisState`），经调查：
+
+| State 类 | 实际使用情况 |
+|----------|-------------|
+| `ComplexQueryState` | ✅ 被 `skills/complex_query/skill.py` 直接引用 |
+| `SimpleQueryState` | ⚠️ 已导出但未被引用——各 Skill 内部用 TypedDict 版本 |
+| `DataAnalysisState` | ⚠️ 同上 |
+
+**处理方式：** 为文件添加模块 docstring，说明该现象属于"已导出但被部分绕过的状态类"，保留代码（供外部引用），而不是误删。
+
+---
+
+### 25.8 O5 / O6 / O7 — 空文件清理
+
+**O5（根目录重复测试文件）：** 13 个根目录 `test_*.py` 是迁移到 `tests/` 目录前的历史遗留副本，全部删除。
+
+**O6（agent 空壳文件）：**
+
+| 文件 | 状态 | 处理 |
+|------|------|------|
+| `agent/graph_builder.py` | 0 字节，无任何引用 | ✅ 删除 |
+| `agent/nodes.py` | 0 字节，无任何引用 | ✅ 删除 |
+
+这两个文件是旧单体架构的遗留空壳；重构后功能分别由 `skill_graph_builder.py`（主图构建）和 `agent/nodes/common.py`（公共节点）接管，文件本身早已清空且未被任何代码引用。
+
+**O7（tests/ 空占位测试文件）：**
+
+| 文件 | 状态 | 处理 |
+|------|------|------|
+| `tests/test_schema_info.py` | 0 字节 | ✅ 删除 |
+| `tests/test_fix_prompt.py` | 0 字节 | ✅ 删除 |
+| `tests/test_db_connection.py` | 0 字节 | ✅ 删除 |
+| `tests/test_complex_skill.py` | 0 字节 | ✅ 删除 |
+| `tests/test_analysis_skill.py` | 0 字节 | ✅ 删除 |
+
+---
+
+### 25.9 T6 — tests/__init__.py 测试总数精确核实
+
+**改前：** 文档写 "184 个"（已严重过时，未含此后多个轮次新增的测试）。
+
+**核实方式：** 运行完整无 API Key 测试套件（含 Milvus）得到基准数字：
+
+```
+pytest tests/（所有无 API Key 文件）
+262 passed, 5 skipped, 55 subtests passed
+```
+
+- **262 passed**：所有无 API Key + Milvus 测试用例
+- **5 skipped**：需要真实数据库连接的集成测试（`test_column_fuzzy_match` 中的 DB 集成用例）
+- **55 subtests**：`test_retrieval_benchmark.py` 内部的参数化子测试
+
+`tests/__init__.py` 测试数量更新为 **262**，并补充 6 个新测试文件的条目说明。
+
+---
+
+### 25.10 T7 — Milvus 测试全量通过
+
+Milvus 服务启动后，原先 5 个 skipped 的 `test_retrieval_benchmark.py` 测试（其实它们也不依赖真实 Milvus，均以 mock 方式运行）现全部通过：
+
+```
+tests/test_retrieval_benchmark.py: 33 passed, 55 subtests passed
+```
+
+所有测试套件无 API Key 全量通过：**262 passed（5 skipped 为 DB 集成测试）**。
+
+---
+
+### 本轮改动总结
+
+| 类别 | 任务 | 变更内容 |
+|------|------|---------|
+| Bug 修复 | D5 回归 | `_plan_manager = None` 补入 5 处 `__new__` 测试 stub |
+| 兼容性 | T1 | 5 个文件的 `sys.stdout` 移出模块顶层 |
+| 新增测试 | T2 | `test_import.py`：11 个导入冒烟测试 |
+| 新增测试 | T3 | `test_skill_registry.py`：15 个单元测试 |
+| 导入规范 | O1/O2 | 2 处 `langchain.chat_models` → `langchain_core` |
+| 注释更新 | O3 | `query_type` 注释值对齐 D5 节点名 |
+| 文档注释 | O4 | `states.py` 模块 docstring |
+| 文件清理 | O5/O6/O7 | 删除 20 个空/重复文件 |
+| 文档更新 | T6/F1 | `tests/__init__.py` 数量 184 → 262，补充 6 个文件说明 |
+
+*最后更新：2026-04-23*
+

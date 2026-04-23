@@ -6,16 +6,17 @@ with intelligent routing based on query complexity.
 """
 
 import logging
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Callable
 
-from langchain.chat_models import BaseChatModel
-from langchain.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END, add_messages
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from agent.config import AgentConfig
 from agent.database import SQLDatabaseManager
 from agent.tools import SQLToolManager
+from agent.skills.registry import SkillRegistry
 
 # Note: Skills are imported lazily in __init__ to avoid circular imports
 
@@ -27,7 +28,10 @@ class SkillBasedGraphBuilder:
     Build main graph with Skill-based architecture.
     
     Flow:
-        user_input → query_router → [simple_skill | complex_skill | analysis_skill] → output
+        user_input → query_router → [<skill_name> ...] → output
+    
+    Skills are discovered from SkillRegistry; descriptions are loaded
+    automatically from each Skill's SKILL.md (progressive disclosure).
     """
     
     def __init__(
@@ -82,12 +86,30 @@ class SkillBasedGraphBuilder:
         
         # Initialize Skills
         logger.info("Initializing Skills...")
-        self.simple_skill = SimpleQuerySkill(llm, tool_manager, db_manager)
-        self.complex_skill = ComplexQuerySkill(llm, tool_manager, db_manager, retriever=self._retriever, plan_manager=self._plan_manager)
-        self.analysis_skill = DataAnalysisSkill(llm, tool_manager, db_manager, config=config, plan_manager=self._plan_manager)
+        simple_skill = SimpleQuerySkill(llm, tool_manager, db_manager)
+        complex_skill = ComplexQuerySkill(llm, tool_manager, db_manager, retriever=self._retriever, plan_manager=self._plan_manager)
+        analysis_skill = DataAnalysisSkill(llm, tool_manager, db_manager, config=config, plan_manager=self._plan_manager)
         
-        logger.info("Skills initialized successfully")
+        # Register all skills — descriptions loaded from SKILL.md automatically
+        self.registry = SkillRegistry()
+        self.registry.register(simple_skill)
+        self.registry.register(complex_skill)
+        self.registry.register(analysis_skill)
+        
+        logger.info(f"Skills registered: {self.registry.list_skills()}")
     
+    def _make_skill_node(self, skill) -> Callable:
+        """Create a graph node callable for the given skill."""
+        def skill_node(state: Dict[str, Any]) -> Dict[str, Any]:
+            logger.info(f"[Main] Executing skill: {skill.name}")
+            result = skill.invoke(state)
+            return {
+                "messages": result.get("messages", []),
+                "skill_result": result,
+            }
+        skill_node.__name__ = f"{skill.name}_node"
+        return skill_node
+
     def build(self) -> StateGraph:
         """Build the main skill-based graph."""
         from typing_extensions import TypedDict
@@ -96,7 +118,7 @@ class SkillBasedGraphBuilder:
         # Define main graph state
         class MainGraphState(TypedDict):
             messages: Annotated[list, add_messages]
-            query_type: str  # "simple", "complex", "analysis"
+            query_type: str  # matched skill name
             skill_result: dict  # Result from selected skill
         
         logger.info("Building Skill-based main graph")
@@ -106,29 +128,24 @@ class SkillBasedGraphBuilder:
         # Add router node
         graph.add_node("query_router", self._query_router_node)
         
-        # Add skill nodes
-        graph.add_node("simple_skill", self._simple_skill_node)
-        graph.add_node("complex_skill", self._complex_skill_node)
-        graph.add_node("analysis_skill", self._analysis_skill_node)
+        # Dynamically add one node per registered skill
+        skill_names = self.registry.list_skills()
+        for name, skill in self.registry.get_all().items():
+            graph.add_node(name, self._make_skill_node(skill))
         
         # Define routing flow
         graph.add_edge(START, "query_router")
         
-        # Conditional routing based on query type
+        # Conditional routing: keys come from registry, not hardcoded
         graph.add_conditional_edges(
             "query_router",
             self._route_to_skill,
-            {
-                "simple": "simple_skill",
-                "complex": "complex_skill",
-                "analysis": "analysis_skill"
-            }
+            {name: name for name in skill_names},
         )
         
         # All skills end at END
-        graph.add_edge("simple_skill", END)
-        graph.add_edge("complex_skill", END)
-        graph.add_edge("analysis_skill", END)
+        for name in skill_names:
+            graph.add_edge(name, END)
         
         # Compile with checkpointer if provided
         if self.checkpointer:
@@ -137,111 +154,65 @@ class SkillBasedGraphBuilder:
     
     def _query_router_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Route query to appropriate Skill based on complexity analysis.
+        Route query to appropriate Skill based on registry descriptions.
         
-        Classification:
-        - Simple: Single table, basic conditions, no aggregation
-        - Complex: Multiple tables, JOINs, subqueries, multi-step logic
-        - Analysis: Requires insights, trends, visualizations, reports
+        Skill descriptions are loaded dynamically from SKILL.md via SkillRegistry,
+        enabling progressive disclosure: only skill summaries are sent to LLM here;
+        full tool details are only exposed inside each skill's subgraph.
         """
         logger.info("[Router] Analyzing query complexity")
         
         messages = state.get("messages", [])
-        user_question = messages[0].content if messages else ""
+        # Use the latest HumanMessage for multi-turn conversation support
+        user_question = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "type") and msg.type == "human":
+                user_question = msg.content
+                break
+        if not user_question and messages:
+            user_question = messages[0].content
         
-        # Classification prompt
-        system_prompt = """You are a query complexity classifier. Analyze the user's question and classify it into ONE category:
+        # Build classification prompt dynamically from registry (sourced from SKILL.md)
+        skill_descriptions = self.registry.build_router_prompt()
+        valid_names = self.registry.list_skills()
+        
+        system_prompt = f"""你是一个查询意图分类器。根据用户问题，从以下可用技能中选择最合适的一个。
 
-**SIMPLE** - Single table query with basic filters
-Examples:
-- "List all users"
-- "Show me the first 10 products"
-- "Find users where status = 'active'"
-- "Get shop with ID = 5"
+{skill_descriptions}
 
-**COMPLEX** - Multi-step query requiring planning
-Examples:
-- "Find top 3 shops by voucher count with average values"
-- "Compare sales across regions and product categories"
-- "Show users with most blog posts AND comments"
-- "Calculate conversion rate by shop and time period"
-
-**ANALYSIS** - Requires insights, trends, or recommendations
-Examples:
-- "Analyze user engagement trends"
-- "What factors drive high sales?"
-- "Identify underperforming categories and suggest improvements"
-- "Create a report on platform growth"
-- "Visualize the distribution of..."
-
-Output ONLY the category name: "simple", "complex", or "analysis"
+规则：
+- 只输出技能名称，不要输出任何其他内容
+- 必须是以下名称之一：{valid_names}
 """
         
         classification_messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Question: {user_question}\n\nClassify this query.")
+            HumanMessage(content=f"用户问题：{user_question}\n\n请输出技能名称。")
         ]
         
         response = self.llm.invoke(classification_messages)
         classification = response.content.strip().lower()
         
-        # Validate classification
-        if classification not in ["simple", "complex", "analysis"]:
-            logger.warning(f"[Router] Invalid classification: {classification}, defaulting to 'simple'")
-            classification = "simple"
+        # Validate — fallback to first registered skill if unknown
+        if classification not in valid_names:
+            fallback = valid_names[0]
+            logger.warning(f"[Router] Unknown classification '{classification}', defaulting to '{fallback}'")
+            classification = fallback
         
         logger.info(f"[Router] Query classified as: {classification}")
         
-        new_message = AIMessage(
-            content=f"Query Type: {classification.upper()}"
-        )
+        new_message = AIMessage(content=f"Query Type: {classification.upper()}")
         
         return {
             "messages": [new_message],
-            "query_type": classification
+            "query_type": classification,
         }
     
-    def _route_to_skill(self, state: Dict[str, Any]) -> Literal["simple", "complex", "analysis"]:
+    def _route_to_skill(self, state: Dict[str, Any]) -> str:
         """Determine which skill to route to based on query_type."""
-        query_type = state.get("query_type", "simple")
-        logger.info(f"[Router] Routing to {query_type} skill")
+        query_type = state.get("query_type", self.registry.list_skills()[0])
+        logger.info(f"[Router] Routing to skill: {query_type}")
         return query_type
-    
-    def _simple_skill_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute Simple Query Skill."""
-        logger.info("[Main] Executing Simple Query Skill")
-        
-        # Invoke skill
-        result = self.simple_skill.invoke(state)
-        
-        return {
-            "messages": result.get("messages", []),
-            "skill_result": result
-        }
-    
-    def _complex_skill_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute Complex Query Skill."""
-        logger.info("[Main] Executing Complex Query Skill")
-        
-        # Invoke skill
-        result = self.complex_skill.invoke(state)
-        
-        return {
-            "messages": result.get("messages", []),
-            "skill_result": result
-        }
-    
-    def _analysis_skill_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute Data Analysis Skill."""
-        logger.info("[Main] Executing Data Analysis Skill")
-        
-        # Invoke skill
-        result = self.analysis_skill.invoke(state)
-        
-        return {
-            "messages": result.get("messages", []),
-            "skill_result": result
-        }
 
 
 def create_skill_based_graph(
@@ -254,22 +225,30 @@ def create_skill_based_graph(
     
     Args:
         config: Agent configuration
-        llm: Language model instance
+        llm: Language model instance (BaseChatModel or RunnableRetry wrapping one)
         checkpointer: Optional checkpointer for memory
         
     Returns:
         Compiled StateGraph ready for execution
     """
     logger.info("Creating Skill-based SQL Agent graph")
-    
+
+    # Skills need BaseChatModel for bind_tools(); unwrap RunnableRetry if needed.
+    # Correct retry pattern: base_llm.bind_tools(tools).with_retry(...), not the
+    # other way around. We pass the base model to all components; each call site
+    # that needs retry can call .with_retry() after bind_tools().
+    base_llm = llm
+    if not isinstance(llm, BaseChatModel) and hasattr(llm, "bound"):
+        base_llm = llm.bound
+
     # Initialize managers
     db_manager = SQLDatabaseManager(config.database, security_config=config.security)
-    tool_manager = SQLToolManager(db_manager, llm)
+    tool_manager = SQLToolManager(db_manager, base_llm)
     
     # Build graph
     builder = SkillBasedGraphBuilder(
         config=config,
-        llm=llm,
+        llm=base_llm,
         db_manager=db_manager,
         tool_manager=tool_manager,
         checkpointer=checkpointer
@@ -279,3 +258,4 @@ def create_skill_based_graph(
     
     logger.info("Skill-based SQL Agent graph created successfully")
     return graph
+

@@ -16,7 +16,6 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.config import DatabaseConfig
@@ -203,7 +202,7 @@ class TestFixQueryHintInjection(unittest.TestCase):
 
     def test_hint_injected_when_column_error(self):
         """_fix_query should inject column hint into the HumanMessage sent to LLM."""
-        from langchain.messages import AIMessage
+        from langchain_core.messages import AIMessage
 
         # Mock LLM response (a tool call)
         mock_response = MagicMock(spec=AIMessage)
@@ -221,7 +220,7 @@ class TestFixQueryHintInjection(unittest.TestCase):
         result = self.skill._fix_query(state)
 
         # Find the HumanMessage that was added (fix prompt)
-        from langchain.messages import HumanMessage
+        from langchain_core.messages import HumanMessage
         human_messages = [m for m in result["messages"] if isinstance(m, HumanMessage)]
         self.assertTrue(len(human_messages) > 0, "No HumanMessage found in result")
 
@@ -235,7 +234,7 @@ class TestFixQueryHintInjection(unittest.TestCase):
 
     def test_no_hint_for_syntax_error(self):
         """_fix_query should NOT inject column hint for syntax errors."""
-        from langchain.messages import AIMessage, HumanMessage
+        from langchain_core.messages import AIMessage, HumanMessage
 
         mock_response = MagicMock(spec=AIMessage)
         mock_response.tool_calls = [{"id": "t1", "name": "sql_db_query", "args": {"query": "SELECT name FROM tb_shop"}}]
@@ -259,7 +258,7 @@ class TestFixQueryHintInjection(unittest.TestCase):
 
     def test_retry_count_incremented(self):
         """retry_count should be incremented after _fix_query."""
-        from langchain.messages import AIMessage
+        from langchain_core.messages import AIMessage
 
         mock_response = MagicMock(spec=AIMessage)
         mock_response.tool_calls = [{"id": "t1", "name": "sql_db_query", "args": {"query": "SELECT x FROM y"}}]
@@ -281,6 +280,8 @@ class TestFixQueryHintInjection(unittest.TestCase):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run_all():
+    # Windows UTF-8 输出（仅直接运行时生效，不影响 pytest 收集）
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     print("=" * 70)
     print("  列名模糊匹配 集成测试")
     print("=" * 70)

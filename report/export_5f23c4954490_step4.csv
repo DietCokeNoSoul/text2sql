@@ -1,0 +1,10 @@
+﻿Error: (pymysql.err.OperationalError) (1242, 'Subquery returns more than 1 row')
+[SQL: SELECT 
+    (SELECT COUNT(*) FROM tb_follow) AS total_relations,
+    (SELECT COUNT(*) FROM tb_follow GROUP BY user_id) AS out_degree,
+    (SELECT COUNT(*) FROM tb_follow GROUP BY follow_user_id) AS in_degree,
+    COUNT(*) AS mutual_count
+FROM tb_follow f1
+JOIN tb_follow f2 ON f1.user_id = f2.follow_user_id AND f1.follow_user_id = f2.user_id
+WHERE f1.id < f2.id;]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)

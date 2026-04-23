@@ -1,14 +1,15 @@
 """
 Data Analysis Skill Implementation
 
-7-step comprehensive data analysis workflow:
-1. understand_goal → Understand user's analysis objective
-2. explore_data → Explore database structure and statistics
-3. plan_analysis → Generate detailed analysis plan
-4. generate_sql_queries → Create SQL queries for analysis
-5. analyze_results → Analyze query results and extract insights
-6. visualize → Generate visualization recommendations
-7. generate_report → Create comprehensive analysis report
+8-step comprehensive data analysis workflow:
+1. understand_goal     → Understand user's analysis objective
+2. explore_data        → Explore database structure and statistics
+3. plan_analysis       → Generate detailed analysis plan
+4. generate_queries    → Create SQL queries for analysis
+5. analyze_results     → Analyze query results and extract insights
+6. visualize           → Generate visualization recommendations
+7. generate_report     → Create comprehensive analysis report
+8. export_results      → Export query results to CSV/Excel files
 """
 
 import logging
@@ -16,10 +17,11 @@ import csv
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from langchain.chat_models import BaseChatModel
-from langchain.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END, START, add_messages
 
 from agent.config import AgentConfig, OutputConfig
@@ -86,11 +88,12 @@ class DataAnalysisSkill(BaseSkill):
         self._output_config: OutputConfig = config.output if config else OutputConfig()
         self._plan_manager = plan_manager
         
+        _md = Path(__file__).parent / "SKILL.md"
         super().__init__(
             name="data_analysis",
             llm=llm,
             tool_manager=tool_manager,
-            description="执行完整的数据分析流程，包含洞察发现和可视化建议"
+            skill_md_path=str(_md),
         )
     
     def _build_graph(self) -> StateGraph:
@@ -153,9 +156,16 @@ class DataAnalysisSkill(BaseSkill):
         - Expected output format
         """
         logger.info("[DataAnalysis] Understanding analysis goal")
-        
+
         messages = state.get("messages", [])
-        user_question = messages[0].content if messages else ""
+        # Use the latest HumanMessage for multi-turn conversation support
+        user_question = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "type") and msg.type == "human":
+                user_question = msg.content
+                break
+        if not user_question and messages:
+            user_question = messages[0].content
         
         system_prompt = """You are a data analyst. Analyze the user's request and extract:
 
@@ -209,6 +219,7 @@ Return ONLY the JSON object, nothing else.
                         {"step_id": 5, "description": "analyze_results: 分析结果洞察", "depends_on": [4]},
                         {"step_id": 6, "description": "visualize: 生成可视化建议", "depends_on": [5]},
                         {"step_id": 7, "description": "generate_report: 生成分析报告", "depends_on": [6]},
+                        {"step_id": 8, "description": "export_results: 导出CSV/Excel结果文件", "depends_on": [7]},
                     ],
                 )
                 self._plan_manager.update_step(task_id, 1, "done",
@@ -757,12 +768,6 @@ Output as JSON ONLY:
         new_message = AIMessage(content=report_content)
         self._step_done(state, 7, f"Report generated ({len(report_content)} chars)")
         
-        # ── Session plan: mark overall task complete ───────────────────────
-        task_id = state.get("task_id", "")
-        if self._plan_manager and task_id:
-            self._plan_manager.mark_complete(task_id, success=True)
-            logger.info(f"[SessionPlan] Task {task_id} complete")
-        
         return {
             "messages": [new_message],
             "report": report_content
@@ -777,6 +782,7 @@ Output as JSON ONLY:
         Excel workbook (.xlsx) is also produced with one sheet per query.
         """
         logger.info("[DataAnalysis] Exporting query results")
+        self._step_start(state, 8)
 
         query_results = state.get("query_results", [])
         task_id = state.get("task_id", "")
@@ -845,6 +851,14 @@ Output as JSON ONLY:
             logger.warning(f"[DataAnalysis] Failed to write Excel: {e}")
 
         summary = f"导出了 {len(export_files)} 个文件到 {report_dir}" if export_files else "无可导出数据"
+        self._step_done(state, 8, summary)
+        
+        # ── Session plan: mark overall task complete ───────────────────────
+        task_id = state.get("task_id", "")
+        if self._plan_manager and task_id:
+            self._plan_manager.mark_complete(task_id, success=True)
+            logger.info(f"[SessionPlan] Task {task_id} complete")
+        
         return {
             "messages": [AIMessage(content=summary)],
             "export_files": export_files,

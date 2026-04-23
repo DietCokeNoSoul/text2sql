@@ -239,9 +239,10 @@ class SessionPlanManager:
         if plan is None:
             return ""
 
-        done    = [s for s in plan.steps if s.status == "done"]
-        pending = [s for s in plan.steps if s.status == "pending"]
-        failed  = [s for s in plan.steps if s.status == "failed"]
+        done       = [s for s in plan.steps if s.status == "done"]
+        in_progress = [s for s in plan.steps if s.status == "in_progress"]
+        pending    = [s for s in plan.steps if s.status == "pending"]
+        failed     = [s for s in plan.steps if s.status == "failed"]
 
         lines = [
             f"## 当前任务进度: {plan.title}",
@@ -255,6 +256,13 @@ class SessionPlanManager:
                 lines.append(f"- Step {s.step_id}: {s.description}")
                 if s.result_summary:
                     lines.append(f"  → 结果: {s.result_summary}")
+
+        if in_progress:
+            lines.append("### [running] 执行中步骤")
+            for s in in_progress:
+                lines.append(f"- Step {s.step_id}: {s.description}")
+                if s.started_at:
+                    lines.append(f"  → 开始时间: {s.started_at}")
 
         if pending:
             lines.append("### [pending] 待执行步骤")

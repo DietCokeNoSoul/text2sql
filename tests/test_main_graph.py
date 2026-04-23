@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, r"c:\Users\71949\Desktop\text2sql")
 
 from langchain_community.chat_models import ChatTongyi
-from langchain.messages import HumanMessage
+from langchain_core.messages import HumanMessage
 
 from agent.config import get_config
 from agent.skill_graph_builder import create_skill_based_graph
