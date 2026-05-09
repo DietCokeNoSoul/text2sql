@@ -26,7 +26,8 @@ if sys.platform == "win32":
 from langchain.chat_models import init_chat_model
 from langchain_community.cache import SQLiteCache
 from langchain_core.globals import set_llm_cache
-from langgraph.checkpoint.memory import InMemorySaver
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .config import get_config
 from .skill_graph_builder import create_skill_based_graph as create_sql_agent_graph
@@ -35,7 +36,9 @@ from .logging_config import setup_logging
 
 # ── 节点名称→人类可读标签 ──────────────────────────────────────────────────
 _NODE_LABELS: dict[str, str] = {
-    "query_router":         "🔀 路由器",
+    "intent_router":        "🔀 意图路由",
+    "general_chat":         "💬 普通对话",
+    "skill_router":         "🎯 技能路由",
     "list_tables":          "📋 列出表",
     "get_schema":           "🗂  获取结构",
     "dual_tower_retrieve":  "🔍 双塔检索",
@@ -110,8 +113,20 @@ if config.cache.enabled and config.cache.backend == "sqlite":
     except Exception as e:
         logger.warning(f"Failed to initialize LLM cache: {e}")
 
-# 创建内存检查点保存器（用于多轮对话记忆）
-checkpointer = InMemorySaver()
+# 初始化语义查询缓存（仅在 cache 启用时开启）
+from .query_cache import init_query_cache, get_query_cache
+_query_cache = None
+if config.cache.enabled:
+    try:
+        _query_cache = init_query_cache()
+        logger.info("Semantic query cache enabled")
+    except Exception as e:
+        logger.warning(f"Failed to initialize semantic query cache: {e}")
+
+# 创建持久化检查点保存器（对话记忆写入本地 SQLite 文件）
+_CHECKPOINT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "checkpoints.db")
+_checkpoint_conn = sqlite3.connect(_CHECKPOINT_DB, check_same_thread=False)
+checkpointer = SqliteSaver(_checkpoint_conn)
 
 # 创建图（带记忆功能）
 try:
@@ -179,6 +194,21 @@ def run_query(question: str, thread_id: str) -> dict:
             export_files   — DataAnalysis 导出的文件路径列表（其他技能为空）
     """
     logger.info(f"Running query (thread={thread_id}): {question}")
+
+    # ── 语义缓存查找 ──────────────────────────────────────────────────────────
+    if _query_cache:
+        cached = _query_cache.lookup(question)
+        if cached:
+            print(f"\n{'═' * 55}")
+            print(f"  ⚡ 语义缓存命中 (相似度={cached['_cache_score']:.2%})")
+            print(f"  匹配问题: {cached['_cache_question'][:50]}...")
+            print(f"{'═' * 55}")
+            print(cached.get("final_message", ""))
+            print(f"\n{'═' * 55}")
+            print("  ✅ 缓存结果返回（0 LLM 调用）")
+            print(f"{'═' * 55}\n")
+            return cached
+
     config_with_thread = {"configurable": {"thread_id": thread_id}}
 
     print(f"\n{'═' * 55}")
@@ -216,29 +246,36 @@ def run_query(question: str, thread_id: str) -> dict:
         logger.error(f"Error running query: {e}")
         raise
 
-    return {
+    result = {
         "final_message": final_message,
         "nodes_visited": nodes_visited,
         "export_files": export_files,
     }
 
+    # ── 存入语义缓存 ──────────────────────────────────────────────────────────
+    if _query_cache:
+        _query_cache.store(question, result)
+
+    return result
+
 
 # ── 异步 token 级流式查询 ──────────────────────────────────────────────────
 
 async def run_query_streaming_async(question: str, thread_id: str) -> dict:
-    """异步 token 级流式输出（astream_events）。
-
-    通过 LangGraph 的 astream_events API 捕获每个 LLM chunk 事件，
-    在 LLM 生成 token 时实时逐字打印，体验更流畅。
-
-    参数:
-        question:  用户的自然语言问题
-        thread_id: 会话线程 ID
-
-    返回:
-        dict，包含 final_message / nodes_visited / export_files
-    """
+    """异步 token 级流式输出（astream_events）。"""
     logger.info(f"Streaming query (thread={thread_id}): {question}")
+
+    # ── 语义缓存查找（流式模式同样受益）────────────────────────────────────────
+    if _query_cache:
+        cached = _query_cache.lookup(question)
+        if cached:
+            print(f"\n{'═' * 55}")
+            print(f"  ⚡ 语义缓存命中 (相似度={cached['_cache_score']:.2%})")
+            print(f"  匹配问题: {cached['_cache_question'][:50]}...")
+            print(f"{'═' * 55}")
+            print(cached.get("final_message", ""))
+            return cached
+
     config_with_thread = {"configurable": {"thread_id": thread_id}}
 
     print(f"\n{'═' * 55}")
@@ -299,11 +336,18 @@ async def run_query_streaming_async(question: str, thread_id: str) -> dict:
 
     print(f"\n{'═' * 55}")
     print("  ✅ 流式输出完成")
-    return {
+
+    result = {
         "final_message": final_message,
         "nodes_visited": nodes_visited,
         "export_files": export_files,
     }
+
+    # ── 存入语义缓存 ──────────────────────────────────────────────────────────
+    if _query_cache:
+        _query_cache.store(question, result)
+
+    return result
 
 
 def run_query_streaming(question: str, thread_id: str) -> dict:
