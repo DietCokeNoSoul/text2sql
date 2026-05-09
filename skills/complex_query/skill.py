@@ -23,6 +23,7 @@ from agent.tools import SQLToolManager
 from agent.database import SQLDatabaseManager
 from agent.skills.base import BaseSkill
 from agent.skills.states import ComplexQueryState
+from agent.sql_correction import execute_with_correction
 
 logger = logging.getLogger(__name__)
 
@@ -349,51 +350,61 @@ If the question is simple (single table, single query), output:
             # Replace placeholders with actual results from dependencies
             query = self._resolve_query_placeholders(query, step.get("depends_on", []), step_results)
             
-            try:
-                # Execute query using tool
-                query_tool = self.tool_manager.get_query_tool()
-                result = query_tool.invoke({"query": query})
-                
+            # Execute query with automatic error correction (up to 2 retries)
+            query_tool = self.tool_manager.get_query_tool()
+            exec_result = execute_with_correction(
+                sql=query,
+                query_tool=query_tool,
+                db_manager=self.db_manager,
+                llm=self.llm,
+                max_retries=2,
+                context_label=f"[ComplexQuery] step {step_id}",
+            )
+
+            if exec_result["success"]:
+                result = exec_result["result"]
                 step_results[step_id] = {
                     "step_id": step_id,
                     "description": step["description"],
-                    "query": query,
+                    "query": exec_result["final_sql"],
                     "original_query": step["query"],
                     "result": result,
-                    "success": True
+                    "success": True,
+                    "retries": exec_result["retries"],
                 }
-                logger.info(f"[ComplexQuery] Step {step_id} executed successfully")
-                
+                logger.info(f"[ComplexQuery] Step {step_id} executed successfully (retries={exec_result['retries']})")
+
                 # ── Session plan: mark step done ──────────────────────────
                 if self._plan_manager and task_id:
                     result_preview = str(result)[:200] if result else ""
                     self._plan_manager.update_step(
                         task_id, step_id, "done",
-                        sql=query,
+                        sql=exec_result["final_sql"],
                         result_summary=result_preview,
                     )
-                
-            except Exception as e:
-                logger.error(f"[ComplexQuery] Step {step_id} failed: {e}")
+            else:
+                error_str = exec_result["error"]
+                logger.error(f"[ComplexQuery] Step {step_id} failed after correction: {error_str}")
                 step_results[step_id] = {
                     "step_id": step_id,
                     "description": step["description"],
-                    "query": query,
+                    "query": exec_result["final_sql"],
                     "original_query": step["query"],
-                    "error": str(e),
-                    "success": False
+                    "error": error_str,
+                    "success": False,
+                    "retries": exec_result["retries"],
                 }
                 # ── Session plan: mark step failed ────────────────────────
                 if self._plan_manager and task_id:
                     self._plan_manager.update_step(
                         task_id, step_id, "failed",
-                        sql=query,
-                        error=str(e),
+                        sql=exec_result["final_sql"],
+                        error=error_str,
                     )
                     self._plan_manager.add_note(
                         task_id, "blocker",
-                        f"Step {step_id} 执行失败",
-                        f"SQL: {query[:150]}\n错误: {str(e)[:150]}",
+                        f"Step {step_id} 执行失败（纠错后仍失败）",
+                        f"SQL: {exec_result['final_sql'][:150]}\n错误: {error_str[:150]}",
                     )
         
         return {"step_results": step_results}

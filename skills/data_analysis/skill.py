@@ -28,6 +28,7 @@ from agent.config import AgentConfig, OutputConfig
 from agent.tools import SQLToolManager
 from agent.database import SQLDatabaseManager
 from agent.skills.base import BaseSkill
+from agent.sql_correction import execute_with_correction
 
 logger = logging.getLogger(__name__)
 
@@ -517,19 +518,29 @@ Output format:
             step_id = query_data.get("step_id")
             description = query_data.get("description")
             sql = query_data.get("query")
-            
-            try:
-                # Execute query
-                result = query_tool.invoke({"query": sql})
-                
+
+            # Execute with automatic SQL error correction (up to 2 retries)
+            exec_result = execute_with_correction(
+                sql=sql,
+                query_tool=query_tool,
+                db_manager=self.db_manager,
+                llm=self.llm,
+                max_retries=2,
+                context_label=f"[DataAnalysis] step {step_id}",
+            )
+
+            if exec_result["success"]:
+                result = exec_result["result"]
                 query_results.append({
                     "step_id": step_id,
                     "description": description,
-                    "query": sql,
+                    "query": exec_result["final_sql"],
+                    "original_query": sql,
                     "result": result,
-                    "success": True
+                    "success": True,
+                    "retries": exec_result["retries"],
                 })
-                
+
                 # Generate insight from result
                 insight_prompt = f"""Analyze this query result and extract key insights.
 
@@ -538,28 +549,26 @@ Result: {result[:500]}
 
 What are the key findings?
 """
-                
                 insight_messages = [
                     SystemMessage(content="You are a data analyst extracting insights."),
-                    HumanMessage(content=insight_prompt)
+                    HumanMessage(content=insight_prompt),
                 ]
-                
                 insight_response = self.llm.invoke(insight_messages)
                 insights.append({
                     "step_id": step_id,
-                    "insight": insight_response.content
+                    "insight": insight_response.content,
                 })
-                
-                logger.info(f"[DataAnalysis] Analyzed step {step_id}")
-                
-            except Exception as e:
-                logger.error(f"[DataAnalysis] Query failed for step {step_id}: {e}")
+                logger.info(f"[DataAnalysis] Analyzed step {step_id} (retries={exec_result['retries']})")
+            else:
+                logger.error(f"[DataAnalysis] Query failed for step {step_id} after correction: {exec_result['error']}")
                 query_results.append({
                     "step_id": step_id,
                     "description": description,
-                    "query": sql,
-                    "error": str(e),
-                    "success": False
+                    "query": exec_result["final_sql"],
+                    "original_query": sql,
+                    "error": exec_result["error"],
+                    "success": False,
+                    "retries": exec_result["retries"],
                 })
         
         new_message = AIMessage(

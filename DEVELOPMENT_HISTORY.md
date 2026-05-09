@@ -33,6 +33,8 @@
 23. [阶段十九：导入规范化补全](#23-阶段十九导入规范化补全a10a11b16c8)
 24. [阶段二十：SKILL.md 渐进式披露重构](#24-阶段二十skillmd-渐进式披露重构)
 25. [阶段二十一：测试体系完善与代码质量清理](#25-阶段二十一测试体系完善与代码质量清理)
+26. [阶段二十二：SQL 纠错循环共享化](#26-阶段二十二sql-纠错循环共享化)
+27. [阶段二十三：结构化 SQL 错误分类体系](#27-阶段二十三结构化-sql-错误分类体系)
 
 ---
 
@@ -1928,3 +1930,125 @@ tests/test_retrieval_benchmark.py: 33 passed, 55 subtests passed
 
 *最后更新：2026-04-23*
 
+---
+
+## 26. 阶段二十二：SQL 纠错循环共享化
+
+### 问题发现
+
+在对真实 MySQL 数据库（包含 `tb_blog`、`tb_follow`、`tb_blog_comments` 等表）进行端到端测试时，发现 `data_analysis` 技能的所有查询步骤都失败，错误报告中提示「字段不存在」，但实际字段确实存在于数据库中。
+
+深入排查后定位到两个根本原因：
+
+**改前问题：**
+
+1. **`data_analysis` 和 `complex_query` 没有 SQL 纠错循环**  
+   `_analyze_results()` 和 `_execute_step_node()` 中只有裸 `try/except`，SQL 一旦失败就记录 `{"success": False}` 然后继续，没有任何重试或修复机制。
+
+2. **LLM 生成 SQL 时的列名幻觉**  
+   `tb_blog` 的主键是 `id`，但 LLM 写出了 `COUNT(blog_id)`（`blog_id` 实际是 `tb_blog_comments` 的外键）；另一步中使用了外层查询里不存在的别名 `b.create_time`。这类错误只需把错误信息反馈给 LLM 即可修复，但之前没有这条路径。
+
+3. **架构不一致**：`simple_query` 有完整的纠错循环（fuzzy column match + LLM 修复，最多 3 次），但另外两个技能没有，导致同一系统内鲁棒性悬殊。
+
+**LLM 事后诊断不可信**：当所有查询失败后，LLM 生成的报告自我诊断「`shop_id` 和 `create_time` 字段不存在」，但这两个字段实际存在——LLM 在没有真实错误信息的情况下只是在"编造"解释。
+
+### 解决方案：共享纠错工具
+
+**改后方案：** 提取 `simple_query` 的纠错逻辑为独立模块，供所有技能复用。
+
+**新增文件：** `agent/sql_correction.py`
+
+```
+execute_with_correction(sql, query_tool, db_manager, llm, max_retries=2)
+  ├── 尝试执行 SQL
+  ├── 成功 → 返回结果
+  └── 失败 →
+       ├── _extract_bad_column(error_msg)    # 正则解析错误中的列名
+       ├── db_manager.find_similar_columns() # difflib 模糊匹配
+       ├── _build_column_hint()              # 构建建议提示
+       ├── _llm_fix_sql(llm, bad_sql, error, hint)  # LLM 重写 SQL
+       └── 重试（最多 max_retries 次）
+```
+
+返回值统一为 `dict`：`result`、`final_sql`、`success`、`error`、`retries`。
+
+### 修改文件清单
+
+| 文件 | 改动内容 |
+|------|---------|
+| `agent/sql_correction.py` | **新建**：共享 SQL 纠错工具，含 `execute_with_correction()` |
+| `skills/data_analysis/skill.py` | `_analyze_results()`：裸 `try/except` → 调用 `execute_with_correction()` |
+| `skills/complex_query/skill.py` | `_execute_step_node()`：裸 `try/except` → 调用 `execute_with_correction()` |
+
+### 改动对比
+
+| 维度 | 改前 | 改后 |
+|------|------|------|
+| `data_analysis` SQL 错误处理 | 记录失败，不重试 | 自动提取错误列名 → fuzzy match → LLM 修复 → 重试（最多 2 次）|
+| `complex_query` SQL 错误处理 | 记录失败，标记 step failed | 同上 |
+| `simple_query` SQL 错误处理 | 有纠错循环 | 不变（依然是参考实现）|
+| 纠错逻辑维护点 | 1 处（simple_query 私有）| 1 处（sql_correction.py 共享）|
+| `retries` 字段 | 无 | query_results 中记录实际重试次数，便于诊断 |
+| 报告中 final_sql | 始终是原始失败 SQL | 记录最终执行成功/失败的 SQL（含 LLM 修复版本）|
+
+### 效果
+
+LLM 生成 `COUNT(blog_id)` 这类典型列名幻觉，现在会走如下路径：
+
+```
+执行失败: Unknown column 'blog_id' in 'field list'
+  → 提取: bad_col = "blog_id"
+  → fuzzy match: ["id (tb_blog)", "blog_id (tb_blog_comments)"]
+  → LLM 修复: COUNT(blog_id) → COUNT(id)
+  → 重试: 成功 ✅
+```
+
+*最后更新：2026-05-09*
+
+
+
+## 27. 阶段二十三：结构化 SQL 错误分类体系
+
+### 背景
+
+纠错循环对所有错误一视同仁（模糊列匹配 + LLM 重写）。连接失败、权限被拒、主键冲突等错误无法被 LLM 修复，却会浪费 max_retries 次无效 LLM 调用。
+
+### 解决方案
+
+新建 `agent/sql_errors.py`：7 大类、38 种结构化 SQL 异常 + `classify_sql_error()` 分类函数。
+
+### 错误分类体系
+
+| 类别 | 数量 | 修复策略 | 典型错误 |
+|------|------|---------|---------|
+| SCHEMA | 8 | fuzzy_match_then_llm | 未知列、表不存在、外层作用域别名 |
+| SYNTAX | 9 | llm_rewrite | GROUP BY 缺列、子查询 LIMIT、保留字 |
+| TYPE | 6 | llm_rewrite_with_type_hint | 类型不匹配、日期格式、除零 |
+| CONNECTION | 4 | fail_fast | 连接被拒、认证失败、超时 |
+| SECURITY | 5 | block_and_audit | DML/DDL 护栏拦截、注入检测 |
+| PERFORMANCE | 4 | inject_limit/llm_rewrite | 行数超限、执行超时、笛卡尔积 |
+| CONSTRAINT | 2 | fail_fast | 重复主键、外键违反 |
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `agent/sql_errors.py` | 新建：38 个异常类 + classify_sql_error() |
+| `agent/sql_correction.py` | 重写：按类别分支处理，返回 error_class/error_category |
+
+### 与旧版的关键区别
+
+| 场景 | 旧版行为 | 新版行为 |
+|------|---------|---------|
+| 主键重复 | 调用 LLM 2 次（无效）| 立即 fail_fast，0 次 LLM |
+| 连接失败 | 调用 LLM 2 次（无效）| 立即 fail_fast，0 次 LLM |
+| DML 被拦截 | 调用 LLM 2 次 | block_and_audit，记录后停止 |
+| 行数超限 | 调用 LLM（不知道要加 LIMIT）| 自动注入 `LIMIT 1000` 重试 |
+| 类型错误 | 普通 LLM 重写 | LLM + 类型转换专项提示 |
+| 列名不存在 | 模糊匹配 + LLM（不变）| 同前，但现在只对 SCHEMA 类触发 |
+
+### 这套系统本质上是在纠错循环入口加了一个可修复性判断：
+
+- 可修复（SCHEMA / SYNTAX / TYPE）→ LLM 有机会生成正确 SQL → 进入重试
+- 不可修复（CONNECTION / SECURITY / CONSTRAINT）→ LLM 再聪明也改不了数据冲突或网络断线 → 跳过重试
+- 自动修复（PERFORMANCE 行数超限）→ 不需要 LLM，直接加 LIMIT → 1 次机械重试

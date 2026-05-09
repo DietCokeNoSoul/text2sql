@@ -1,0 +1,127 @@
+=== STDOUT ===
+2026-05-09 15:52:57 - agent.logging_config - [32mINFO[0m - Logging configured - Level: INFO, File: None
+2026-05-09 15:52:58 - agent.graph - [32mINFO[0m - Initialized LLM: tongyi:qwen-plus (retry=3)
+2026-05-09 15:52:58 - agent.graph - [32mINFO[0m - LLM SQLite cache enabled: .langchain_cache.db
+2026-05-09 15:52:58 - agent.skill_graph_builder - [32mINFO[0m - Creating Skill-based SQL Agent graph
+2026-05-09 15:52:58 - agent.database - [32mINFO[0m - Connecting to database: mysql+pymysql://root:1234@127.0.0.1:3306/dianpng
+2026-05-09 15:52:58 - agent.database - [32mINFO[0m - Successfully connected to mysql database
+2026-05-09 15:52:58 - agent.database - [32mINFO[0m - [SecurityGuard] Initialized with dialect=mysql, allowed=['SELECT'], max_rows=1000
+2026-05-09 15:52:58 - agent.schema_graph - [32mINFO[0m - [SchemaGraph] Built graph: 11 nodes, 0 FK edges, 11 inferred edges
+2026-05-09 15:52:58 - agent.retrieval - [32mINFO[0m - [DualTower] Schema graph: SchemaGraph: 11 tables, 11 edges
+2026-05-09 15:52:59 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loaded existing collection 'text2sql_columns'
+2026-05-09 15:52:59 - agent.column_index - [32mINFO[0m - [ColumnIndex] Dropping old collection for rebuild...
+2026-05-09 15:53:01 - agent.column_index - [32mINFO[0m - [ColumnIndex] Created collection 'text2sql_columns'
+2026-05-09 15:53:07 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loading embedding model: paraphrase-multilingual-MiniLM-L12-v2
+2026-05-09 15:53:07 - sentence_transformers.base.model - [32mINFO[0m - No device provided, using cpu
+2026-05-09 15:53:07 - sentence_transformers.base.model - [32mINFO[0m - Loading SentenceTransformer model from sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2.
+2026-05-09 15:53:11 - agent.column_index - [32mINFO[0m - [ColumnIndex] Embedding model loaded and cached: paraphrase-multilingual-MiniLM-L12-v2
+2026-05-09 15:53:11 - agent.column_index - [32mINFO[0m - [ColumnIndex] Encoding 96 columns...
+2026-05-09 15:53:13 - agent.column_index - [32mINFO[0m - [ColumnIndex] Index built: 96 columns indexed
+2026-05-09 15:53:13 - agent.retrieval - [32mINFO[0m - [DualTower] Index ready: 96 cols, 14778ms
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] DualTowerRetriever ready
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] SessionPlanManager ready (dir=report\sessions)
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - Initializing Skills...
+2026-05-09 15:53:13 - agent.skills.registry - [32mINFO[0m - Skill registry initialized
+2026-05-09 15:53:13 - agent.skills.registry - [32mINFO[0m - Registered skill: simple_query
+2026-05-09 15:53:13 - agent.skills.registry - [32mINFO[0m - Registered skill: complex_query
+2026-05-09 15:53:13 - agent.skills.registry - [32mINFO[0m - Registered skill: data_analysis
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - Skills registered: ['simple_query', 'complex_query', 'data_analysis']
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - Building Skill-based main graph
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - Skill-based SQL Agent graph created successfully
+2026-05-09 15:53:13 - agent.graph - [32mINFO[0m - SQL Agent graph created successfully with memory support
+=================================================================
+  Data Analysis Skill — 集成测试
+=================================================================
+  注意：分析类查询涉及多步 LLM 调用，耗时较长，请耐心等待
+
+────────────────────────────────────────────────────────────
+  测试: 用户行为分析
+  问题: 分析 dianpng 数据库中的用户行为：包括用户注册情况、用户发布博客的活跃度，以及用户关注关系，生成分析报告...
+────────────────────────────────────────────────────────────
+2026-05-09 15:53:13 - agent.graph - [32mINFO[0m - Running query (thread=test-analysis-e6477f56): 分析 dianpng 数据库中的用户行为：包括用户注册情况、用户发布博客的活跃度，以及用户关注关系，生成分析报告
+
+═══════════════════════════════════════════════════════
+  🤖 SQL Agent 正在处理您的问题…
+═══════════════════════════════════════════════════════
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - [Router] Analyzing query complexity
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - [Router] Query classified as: data_analysis
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - [Router] Routing to skill: data_analysis
+
+───────────────────────────────────────────────────────
+  🔀 路由器
+───────────────────────────────────────────────────────
+Query Type: DATA_ANALYSIS
+2026-05-09 15:53:13 - agent.skill_graph_builder - [32mINFO[0m - [Main] Executing skill: data_analysis
+2026-05-09 15:53:13 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Understanding analysis goal
+2026-05-09 15:53:13 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Goal understood: 分析 dianpng 数据库中用户行为的三个核心维度：用户注册情况、博客发布活跃度、用户关注关系
+2026-05-09 15:53:13 - agent.session_plan - [32mINFO[0m - [SessionPlan] Created plan b37ffa2b2d73: '分析 dianpng 数据库中的用户行为：包括用户注册情况、用户发布博客的活跃度，以及用户关注关系，生成分析报告' (8 steps)
+2026-05-09 15:53:13 - skills.data_analysis.skill - [32mINFO[0m - [SessionPlan] Created plan b37ffa2b2d73
+2026-05-09 15:53:13 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Exploring data
+2026-05-09 15:53:13 - agent.tools - [32mINFO[0m - Creating SQL database toolkit
+2026-05-09 15:53:13 - agent.tools - [32mINFO[0m - Created toolkit with 4 tools
+2026-05-09 15:53:13 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Batch schema fetched: 11 tables, 11690 chars
+2026-05-09 15:53:13 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Planning analysis
+2026-05-09 15:53:29 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Plan created with 4 steps
+2026-05-09 15:53:29 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Generating SQL queries
+2026-05-09 15:53:32 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Generated SQL for step 1: SELECT COUNT(DISTINCT user_id) AS total_users, MIN(create_time) AS first_activit
+2026-05-09 15:53:35 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Generated SQL for step 2: SELECT DATE(create_time) AS day, DATE_FORMAT(create_time, '%Y-%m') AS month, COU
+2026-05-09 15:53:38 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Generated SQL for step 3: SELECT 
+    COUNT(*) AS total_blogs,
+    COUNT(*) / COUNT(DISTINCT user_id) AS a
+2026-05-09 15:53:41 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Generated SQL for step 4: SELECT 
+    COUNT(*) AS total_follows,
+    COUNT(*) / COUNT(DISTINCT user_id) AS
+2026-05-09 15:53:41 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Analyzing results
+2026-05-09 15:54:03 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Analyzed step 1 (retries=0)
+2026-05-09 15:54:18 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Analyzed step 2 (retries=0)
+2026-05-09 15:54:38 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Analyzed step 3 (retries=0)
+2026-05-09 15:54:56 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Analyzed step 4 (retries=0)
+2026-05-09 15:54:56 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Generating visualizations
+2026-05-09 15:54:59 - skills.data_analysis.chart_generator - [33mWARNING[0m - [ChartGenerator] Could not parse result for '用户注册趋势图'
+2026-05-09 15:55:02 - skills.data_analysis.chart_generator - [32mINFO[0m - [ChartGenerator] Chart saved: C:\Users\71949\Desktop\text2sql\report/charts\line_每日及每月新增用户趋势.png
+2026-05-09 15:55:02 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Chart generated: C:\Users\71949\Desktop\text2sql\report/charts\line_每日及每月新增用户趋势.png
+2026-05-09 15:55:04 - skills.data_analysis.chart_generator - [33mWARNING[0m - [ChartGenerator] Could not parse result for '博客发布时间分布趋势'
+2026-05-09 15:55:07 - skills.data_analysis.chart_generator - [33mWARNING[0m - [ChartGenerator] Could not parse result for '用户关注与被关注数量对比'
+2026-05-09 15:55:07 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Generating analysis report
+2026-05-09 15:55:57 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Report generated (3803 chars)
+2026-05-09 15:55:57 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Report saved: C:\Users\71949\Desktop\text2sql\report\analysis_20260509_155557.md
+2026-05-09 15:55:57 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Exporting query results
+2026-05-09 15:55:57 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] CSV exported: C:\Users\71949\Desktop\text2sql\report\export_b37ffa2b2d73_step1.csv
+2026-05-09 15:55:57 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] CSV exported: C:\Users\71949\Desktop\text2sql\report\export_b37ffa2b2d73_step2.csv
+2026-05-09 15:55:57 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] CSV exported: C:\Users\71949\Desktop\text2sql\report\export_b37ffa2b2d73_step3.csv
+2026-05-09 15:55:57 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] CSV exported: C:\Users\71949\Desktop\text2sql\report\export_b37ffa2b2d73_step4.csv
+2026-05-09 15:55:58 - skills.data_analysis.skill - [32mINFO[0m - [DataAnalysis] Excel exported: C:\Users\71949\Desktop\text2sql\report\export_b37ffa2b2d73.xlsx
+2026-05-09 15:55:58 - agent.session_plan - [32mINFO[0m - [SessionPlan] Plan b37ffa2b2d73 marked done
+2026-05-09 15:55:58 - skills.data_analysis.skill - [32mINFO[0m - [SessionPlan] Task b37ffa2b2d73 complete
+
+───────────────────────────────────────────────────────
+  ▸ data_analysis
+───────────────────────────────────────────────────────
+导出了 5 个文件到 C:\Users\71949\Desktop\text2sql\report
+
+═══════════════════════════════════════════════════════
+  ✅ 执行完成
+═══════════════════════════════════════════════════════
+
+
+[PASS] 节点链: query_router → data_analysis
+       最终回复长度: 49 字符
+       [WARNING] 缺少预期节点: {'generate_report', 'understand_goal', 'explore_data'}
+
+=================================================================
+  测试结果汇总: 1/1 通过
+=================================================================
+  ✅ PASS  用户行为分析
+
+
+=== STDERR ===
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 7186.05it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+
+=== Return code: 0 ===

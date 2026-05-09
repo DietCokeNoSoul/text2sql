@@ -1,0 +1,9 @@
+﻿Error: (pymysql.err.OperationalError) (1054," ""Unknown column 'blog_id' in 'field list'"")"
+[SQL: SELECT 
+    user_id,
+    COUNT(blog_id) AS blog_count_per_user,
+    COUNT(DISTINCT shop_id) AS shop_breadth_per_user,
+    AVG(liked) AS avg_liked_per_user
+FROM tb_blog
+GROUP BY user_id;]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)

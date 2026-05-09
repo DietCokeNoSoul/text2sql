@@ -1,0 +1,236 @@
+=== STDOUT ===
+2026-05-09 15:51:55 - agent.logging_config - [32mINFO[0m - Logging configured - Level: INFO, File: None
+2026-05-09 15:51:56 - agent.graph - [32mINFO[0m - Initialized LLM: tongyi:qwen-plus (retry=3)
+2026-05-09 15:51:56 - agent.graph - [32mINFO[0m - LLM SQLite cache enabled: .langchain_cache.db
+2026-05-09 15:51:56 - agent.skill_graph_builder - [32mINFO[0m - Creating Skill-based SQL Agent graph
+2026-05-09 15:51:56 - agent.database - [32mINFO[0m - Connecting to database: mysql+pymysql://root:1234@127.0.0.1:3306/dianpng
+2026-05-09 15:51:56 - agent.database - [32mINFO[0m - Successfully connected to mysql database
+2026-05-09 15:51:56 - agent.database - [32mINFO[0m - [SecurityGuard] Initialized with dialect=mysql, allowed=['SELECT'], max_rows=1000
+2026-05-09 15:51:56 - agent.schema_graph - [32mINFO[0m - [SchemaGraph] Built graph: 11 nodes, 0 FK edges, 11 inferred edges
+2026-05-09 15:51:56 - agent.retrieval - [32mINFO[0m - [DualTower] Schema graph: SchemaGraph: 11 tables, 11 edges
+2026-05-09 15:51:57 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loaded existing collection 'text2sql_columns'
+2026-05-09 15:51:57 - agent.column_index - [32mINFO[0m - [ColumnIndex] Dropping old collection for rebuild...
+2026-05-09 15:51:59 - agent.column_index - [32mINFO[0m - [ColumnIndex] Created collection 'text2sql_columns'
+2026-05-09 15:52:05 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loading embedding model: paraphrase-multilingual-MiniLM-L12-v2
+2026-05-09 15:52:05 - sentence_transformers.base.model - [32mINFO[0m - No device provided, using cpu
+2026-05-09 15:52:05 - sentence_transformers.base.model - [32mINFO[0m - Loading SentenceTransformer model from sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2.
+2026-05-09 15:52:08 - agent.column_index - [32mINFO[0m - [ColumnIndex] Embedding model loaded and cached: paraphrase-multilingual-MiniLM-L12-v2
+2026-05-09 15:52:08 - agent.column_index - [32mINFO[0m - [ColumnIndex] Encoding 96 columns...
+2026-05-09 15:52:10 - agent.column_index - [32mINFO[0m - [ColumnIndex] Index built: 96 columns indexed
+2026-05-09 15:52:10 - agent.retrieval - [32mINFO[0m - [DualTower] Index ready: 96 cols, 14344ms
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] DualTowerRetriever ready
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] SessionPlanManager ready (dir=report\sessions)
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - Initializing Skills...
+2026-05-09 15:52:10 - agent.skills.registry - [32mINFO[0m - Skill registry initialized
+2026-05-09 15:52:10 - agent.skills.registry - [32mINFO[0m - Registered skill: simple_query
+2026-05-09 15:52:10 - agent.skills.registry - [32mINFO[0m - Registered skill: complex_query
+2026-05-09 15:52:10 - agent.skills.registry - [32mINFO[0m - Registered skill: data_analysis
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - Skills registered: ['simple_query', 'complex_query', 'data_analysis']
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - Building Skill-based main graph
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - Skill-based SQL Agent graph created successfully
+2026-05-09 15:52:10 - agent.graph - [32mINFO[0m - SQL Agent graph created successfully with memory support
+=================================================================
+  Complex Query Skill — 集成测试
+=================================================================
+
+────────────────────────────────────────────────────────────
+  测试: 多表关联聚合：店铺优惠券统计
+  问题: 统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量...
+────────────────────────────────────────────────────────────
+2026-05-09 15:52:10 - agent.graph - [32mINFO[0m - Running query (thread=test-complex-4804e14d): 统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量
+
+═══════════════════════════════════════════════════════
+  🤖 SQL Agent 正在处理您的问题…
+═══════════════════════════════════════════════════════
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - [Router] Analyzing query complexity
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - [Router] Query classified as: simple_query
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - [Router] Routing to skill: simple_query
+
+───────────────────────────────────────────────────────
+  🔀 路由器
+───────────────────────────────────────────────────────
+Query Type: SIMPLE_QUERY
+2026-05-09 15:52:10 - agent.skill_graph_builder - [32mINFO[0m - [Main] Executing skill: simple_query
+2026-05-09 15:52:10 - agent.nodes.common - [32mINFO[0m - Executing list tables node (common)
+2026-05-09 15:52:10 - agent.tools - [32mINFO[0m - Creating SQL database toolkit
+2026-05-09 15:52:10 - agent.tools - [32mINFO[0m - Created toolkit with 4 tools
+2026-05-09 15:52:10 - agent.nodes.common - [32mINFO[0m - Listed tables: tb_blog, tb_blog_comments, tb_follow, tb_seckill_voucher, tb_shop, tb_shop_type, tb_sign, tb_user, tb_user_info, tb_voucher, tb_voucher_order
+2026-05-09 15:52:11 - agent.nodes.common - [32mINFO[0m - Executing get schema node (common)
+2026-05-09 15:52:11 - agent.nodes.common - [33mWARNING[0m - No tables found in state, fetching all tables
+2026-05-09 15:52:11 - agent.nodes.common - [32mINFO[0m - Fetching schema for tables: tb_blog, tb_blog_comments, tb_follow, tb_seckill_voucher, tb_shop, tb_shop_type, tb_sign, tb_user, tb_user_info, tb_voucher, tb_voucher_order
+2026-05-09 15:52:11 - agent.nodes.common - [32mINFO[0m - Schema retrieval completed (11690 characters)
+2026-05-09 15:52:11 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Generating and executing SQL query
+2026-05-09 15:52:13 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Query generated successfully
+2026-05-09 15:52:13 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Executing query with error capture
+2026-05-09 15:52:13 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Query executed successfully
+2026-05-09 15:52:13 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Query succeeded, ending
+
+───────────────────────────────────────────────────────
+  ▸ simple_query
+───────────────────────────────────────────────────────
+[('101茶餐厅', 2), ('蔡馬洪涛烤肉·老北京铜锅涮羊肉', 0), ('新白鹿餐厅(运河上街店)', 0), ('Mamala(杭州远洋乐堤港店)', 0), ('海底捞火锅(水晶城购物中心店）', 0)]
+
+═══════════════════════════════════════════════════════
+  ✅ 执行完成
+═══════════════════════════════════════════════════════
+
+
+[FAIL] 节点链: query_router → simple_query
+       最终回复长度: 109 字符
+       [WARNING] 未检测到 complex_query 相关节点（可能被路由至其他 Skill）
+
+────────────────────────────────────────────────────────────
+  测试: 多步骤查询：用户订单分析
+  问题: 查询已完成订单最多的前3名用户的ID，并查出这些用户在 tb_user 中的昵称...
+────────────────────────────────────────────────────────────
+2026-05-09 15:52:13 - agent.graph - [32mINFO[0m - Running query (thread=test-complex-4804e14d): 查询已完成订单最多的前3名用户的ID，并查出这些用户在 tb_user 中的昵称
+
+═══════════════════════════════════════════════════════
+  🤖 SQL Agent 正在处理您的问题…
+═══════════════════════════════════════════════════════
+2026-05-09 15:52:13 - agent.skill_graph_builder - [32mINFO[0m - [Router] Analyzing query complexity
+2026-05-09 15:52:13 - agent.skill_graph_builder - [32mINFO[0m - [Router] Query classified as: complex_query
+2026-05-09 15:52:13 - agent.skill_graph_builder - [32mINFO[0m - [Router] Routing to skill: complex_query
+
+───────────────────────────────────────────────────────
+  🔀 路由器
+───────────────────────────────────────────────────────
+Query Type: COMPLEX_QUERY
+2026-05-09 15:52:13 - agent.skill_graph_builder - [32mINFO[0m - [Main] Executing skill: complex_query
+2026-05-09 15:52:13 - agent.nodes.common - [32mINFO[0m - Executing list tables node (common)
+2026-05-09 15:52:13 - agent.nodes.common - [32mINFO[0m - Listed tables: tb_blog, tb_blog_comments, tb_follow, tb_seckill_voucher, tb_shop, tb_shop_type, tb_sign, tb_user, tb_user_info, tb_voucher, tb_voucher_order
+2026-05-09 15:52:13 - agent.nodes.common - [32mINFO[0m - Executing get schema node (common)
+2026-05-09 15:52:13 - agent.nodes.common - [33mWARNING[0m - No tables found in state, fetching all tables
+2026-05-09 15:52:13 - agent.nodes.common - [32mINFO[0m - Fetching schema for tables: tb_blog, tb_blog_comments, tb_follow, tb_seckill_voucher, tb_shop, tb_shop_type, tb_sign, tb_user, tb_user_info, tb_voucher, tb_voucher_order
+2026-05-09 15:52:13 - agent.nodes.common - [32mINFO[0m - Schema retrieval completed (11690 characters)
+2026-05-09 15:52:13 - skills.complex_query.skill - [32mINFO[0m - [DualTower] Retrieving schema for: 统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量
+2026-05-09 15:52:13 - agent.column_index - [32mINFO[0m - [ColumnIndex] Search '统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量...' -> 15 hits (threshold=0.25)
+2026-05-09 15:52:13 - agent.retrieval - [32mINFO[0m - [DualTower T1] Milvus hit tables: ['tb_shop', 'tb_voucher', 'tb_blog', 'tb_shop_type']
+2026-05-09 15:52:13 - agent.schema_graph - [32mINFO[0m - [SchemaGraph] Steiner Tree: 3 tables, 2 joins, weight=3.0
+2026-05-09 15:52:13 - agent.retrieval - [32mINFO[0m - [DualTower T2] Steiner Tree: ['tb_shop', 'tb_voucher', 'tb_blog']
+2026-05-09 15:52:13 - agent.retrieval - [32mINFO[0m - [Retrieval] tables=3/11 | schema 11690→5169 chars | saved 6521 chars (~1863 tokens, 56%) | 50ms
+2026-05-09 15:52:13 - skills.complex_query.skill - [32mINFO[0m - [Retrieval] tables=3/11 | schema 11690→5169 chars | saved 6521 chars (~1863 tokens, 56%) | 50ms
+2026-05-09 15:52:13 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Planning multi-step query
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Generated plan with 2 steps
+2026-05-09 15:52:17 - agent.session_plan - [32mINFO[0m - [SessionPlan] Created plan 124fdf14fc9b: '统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量' (2 steps)
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [SessionPlan] Plan file: report\sessions\124fdf14fc9b\plan.md
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Executing query steps with dependency resolution
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Found 2 ready steps to execute
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Final query: SELECT shop_id, COUNT(*) AS voucher_count FROM tb_voucher GROUP BY shop_id ORDER BY voucher_count DESC LIMIT 5
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Step 1 executed successfully (retries=0)
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Final query: SELECT s.name, v.voucher_count FROM tb_shop s JOIN (SELECT shop_id, COUNT(*) AS voucher_count FROM tb_voucher GROUP BY shop_id ORDER BY voucher_count DESC LIMIT 5) v ON s.id = v.shop_id
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Step 2 executed successfully (retries=0)
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Aggregating step results
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Judging plan completion
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Completion: 2/2 steps
+2026-05-09 15:52:17 - agent.session_plan - [32mINFO[0m - [SessionPlan] Plan 124fdf14fc9b marked done
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [SessionPlan] Task 124fdf14fc9b marked done
+
+───────────────────────────────────────────────────────
+  ▸ complex_query
+───────────────────────────────────────────────────────
+Query execution results:
+
+Step 1: 统计每家店铺的优惠券数量，并按数量降序排列，取前5名
+Result: [(1, 2)]
+
+Step 2: 获取前5名店铺的名称和优惠券数量，通过关联tb_shop表
+Result: [('101茶餐厅', 2)]
+
+
+
+═══════════════════════════════════════════════════════
+  ✅ 执行完成
+═══════════════════════════════════════════════════════
+
+
+[PASS] 节点链: query_router → complex_query
+       最终回复长度: 142 字符
+
+────────────────────────────────────────────────────────────
+  测试: 跨表统计：博客与关注
+  问题: 分别统计 tb_blog 的博客总数、tb_follow 的关注关系总数，以及 tb_user 的用户总数，汇总成一张表...
+────────────────────────────────────────────────────────────
+2026-05-09 15:52:17 - agent.graph - [32mINFO[0m - Running query (thread=test-complex-4804e14d): 分别统计 tb_blog 的博客总数、tb_follow 的关注关系总数，以及 tb_user 的用户总数，汇总成一张表
+
+═══════════════════════════════════════════════════════
+  🤖 SQL Agent 正在处理您的问题…
+═══════════════════════════════════════════════════════
+2026-05-09 15:52:17 - agent.skill_graph_builder - [32mINFO[0m - [Router] Analyzing query complexity
+2026-05-09 15:52:17 - agent.skill_graph_builder - [32mINFO[0m - [Router] Query classified as: complex_query
+2026-05-09 15:52:17 - agent.skill_graph_builder - [32mINFO[0m - [Router] Routing to skill: complex_query
+
+───────────────────────────────────────────────────────
+  🔀 路由器
+───────────────────────────────────────────────────────
+Query Type: COMPLEX_QUERY
+2026-05-09 15:52:17 - agent.skill_graph_builder - [32mINFO[0m - [Main] Executing skill: complex_query
+2026-05-09 15:52:17 - agent.nodes.common - [32mINFO[0m - Executing list tables node (common)
+2026-05-09 15:52:17 - agent.nodes.common - [32mINFO[0m - Listed tables: tb_blog, tb_blog_comments, tb_follow, tb_seckill_voucher, tb_shop, tb_shop_type, tb_sign, tb_user, tb_user_info, tb_voucher, tb_voucher_order
+2026-05-09 15:52:17 - agent.nodes.common - [32mINFO[0m - Executing get schema node (common)
+2026-05-09 15:52:17 - agent.nodes.common - [33mWARNING[0m - No tables found in state, fetching all tables
+2026-05-09 15:52:17 - agent.nodes.common - [32mINFO[0m - Fetching schema for tables: tb_blog, tb_blog_comments, tb_follow, tb_seckill_voucher, tb_shop, tb_shop_type, tb_sign, tb_user, tb_user_info, tb_voucher, tb_voucher_order
+2026-05-09 15:52:17 - agent.nodes.common - [32mINFO[0m - Schema retrieval completed (11690 characters)
+2026-05-09 15:52:17 - skills.complex_query.skill - [32mINFO[0m - [DualTower] Retrieving schema for: 统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量
+2026-05-09 15:52:18 - agent.column_index - [32mINFO[0m - [ColumnIndex] Search '统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量...' -> 15 hits (threshold=0.25)
+2026-05-09 15:52:18 - agent.retrieval - [32mINFO[0m - [DualTower T1] Milvus hit tables: ['tb_shop', 'tb_voucher', 'tb_blog', 'tb_shop_type']
+2026-05-09 15:52:18 - agent.schema_graph - [32mINFO[0m - [SchemaGraph] Steiner Tree: 3 tables, 2 joins, weight=3.0
+2026-05-09 15:52:18 - agent.retrieval - [32mINFO[0m - [DualTower T2] Steiner Tree: ['tb_shop', 'tb_voucher', 'tb_blog']
+2026-05-09 15:52:18 - agent.retrieval - [32mINFO[0m - [Retrieval] tables=3/11 | schema 11690→5169 chars | saved 6521 chars (~1863 tokens, 56%) | 78ms
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [Retrieval] tables=3/11 | schema 11690→5169 chars | saved 6521 chars (~1863 tokens, 56%) | 78ms
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Planning multi-step query
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Generated plan with 2 steps
+2026-05-09 15:52:18 - agent.session_plan - [32mINFO[0m - [SessionPlan] Created plan 59388e7a726f: '统计每家店铺拥有的优惠券数量，并按数量从高到低排列，显示前5名店铺名称和优惠券数量' (2 steps)
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [SessionPlan] Plan file: report\sessions\59388e7a726f\plan.md
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Executing query steps with dependency resolution
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Found 2 ready steps to execute
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Final query: SELECT shop_id, COUNT(*) AS voucher_count FROM tb_voucher GROUP BY shop_id ORDER BY voucher_count DESC LIMIT 5
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Step 1 executed successfully (retries=0)
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Final query: SELECT s.name, v.voucher_count FROM tb_shop s JOIN (SELECT shop_id, COUNT(*) AS voucher_count FROM tb_voucher GROUP BY shop_id ORDER BY voucher_count DESC LIMIT 5) v ON s.id = v.shop_id
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Step 2 executed successfully (retries=0)
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Aggregating step results
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Judging plan completion
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [ComplexQuery] Completion: 2/2 steps
+2026-05-09 15:52:18 - agent.session_plan - [32mINFO[0m - [SessionPlan] Plan 59388e7a726f marked done
+2026-05-09 15:52:18 - skills.complex_query.skill - [32mINFO[0m - [SessionPlan] Task 59388e7a726f marked done
+
+───────────────────────────────────────────────────────
+  ▸ complex_query
+───────────────────────────────────────────────────────
+Query execution results:
+
+Step 1: 统计每家店铺的优惠券数量，并按数量降序排列，取前5名
+Result: [(1, 2)]
+
+Step 2: 获取前5名店铺的名称和优惠券数量，通过关联tb_shop表
+Result: [('101茶餐厅', 2)]
+
+
+
+═══════════════════════════════════════════════════════
+  ✅ 执行完成
+═══════════════════════════════════════════════════════
+
+
+[PASS] 节点链: query_router → complex_query
+       最终回复长度: 142 字符
+
+=================================================================
+  测试结果汇总: 2/3 通过
+=================================================================
+  ❌ FAIL  多表关联聚合：店铺优惠券统计
+  ✅ PASS  多步骤查询：用户订单分析
+  ✅ PASS  跨表统计：博客与关注
+
+
+=== STDERR ===
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 17349.49it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+
+=== Return code: 1 ===
