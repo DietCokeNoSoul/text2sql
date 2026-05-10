@@ -1,8 +1,0 @@
-﻿Error: (pymysql.err.ProgrammingError) (1064," ""You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '(WHERE (user_id", follow_user_id) IN (SELECT follow_user_id," user_id FROM tb_foll' at line 5"")"
-[SQL: SELECT 
-    COUNT(*) AS total_follows,
-    COUNT(*) / COUNT(DISTINCT user_id) AS avg_out_degree,
-    COUNT(*) / COUNT(DISTINCT follow_user_id) AS avg_in_degree,
-    COUNT(*) FILTER (WHERE (user_id, follow_user_id) IN (SELECT follow_user_id, user_id FROM tb_follow)) AS mutual_pairs
-FROM tb_follow;]
-(Background on this error at: https://sqlalche.me/e/20/f405)

@@ -341,7 +341,8 @@ def _cmd_schema(args: argparse.Namespace) -> int:
     from agent.database import SQLDatabaseManager
 
     cfg = get_config()
-    db = SQLDatabaseManager(cfg.database, security_config=cfg.security)
+    db = SQLDatabaseManager(cfg.database, security_config=cfg.security,
+                            schema_cache_config=cfg.schema_cache)
 
     if args.table:
         # Single table DDL

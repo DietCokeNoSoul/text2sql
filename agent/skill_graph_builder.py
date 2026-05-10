@@ -324,7 +324,11 @@ def create_skill_based_graph(
         base_llm = llm.bound
 
     # Initialize managers
-    db_manager = SQLDatabaseManager(config.database, security_config=config.security)
+    db_manager = SQLDatabaseManager(
+        config.database,
+        security_config=config.security,
+        schema_cache_config=config.schema_cache,
+    )
     tool_manager = SQLToolManager(db_manager, base_llm)
     
     # Build graph

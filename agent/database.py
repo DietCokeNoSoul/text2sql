@@ -5,6 +5,7 @@
 """
 
 import difflib
+import json
 import logging
 import re
 import time
@@ -12,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 from langchain_community.utilities import SQLDatabase
 
-from .config import DatabaseConfig, SecurityConfig
+from .config import DatabaseConfig, SchemaCacheConfig, SecurityConfig
 from .security import SQLSecurityGuard, ValidationResult
 from .types import DatabaseConnectionError, DatabaseDialect, QueryExecutionError, SecurityViolationError
 
@@ -113,6 +114,123 @@ class SchemaCache:
         return f"SchemaCache(ttl={self.ttl_seconds}s, entries={stats['schema_entries']}, hit_rate={stats['hit_rate']})"
 
 
+class RedisSchemaCache:
+    """基于 Redis 的 Schema 缓存（持久化、跨进程共享）。
+
+    与 SchemaCache 接口完全一致，可直接替换。
+    键格式：{prefix}table_names  /  {prefix}schema:{table_key}
+    """
+
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 6379,
+        db: int = 0,
+        password: Optional[str] = None,
+        ttl_seconds: int = 300,
+        key_prefix: str = "text2sql:schema:",
+    ) -> None:
+        import redis as _redis  # 运行时导入，保持离线可用
+
+        self.ttl_seconds = ttl_seconds
+        self._prefix = key_prefix
+        self._stats: Dict[str, int] = {"hits": 0, "misses": 0}
+
+        self._client = _redis.Redis(
+            host=host,
+            port=port,
+            db=db,
+            password=password,
+            decode_responses=True,      # 自动解码为 str
+            socket_connect_timeout=2,   # 连接超时 2 秒，快速失败
+        )
+        # 启动时验证连通性
+        self._client.ping()
+        logger.info(
+            f"[RedisSchemaCache] Connected to Redis {host}:{port}/{db}, "
+            f"prefix={key_prefix!r}, ttl={ttl_seconds}s"
+        )
+
+    # ── 内部辅助 ──────────────────────────────────────────────────────────────
+
+    def _key(self, suffix: str) -> str:
+        return f"{self._prefix}{suffix}"
+
+    def _make_table_key(self, table_names: List[str]) -> str:
+        return ",".join(sorted(t.strip() for t in table_names))
+
+    # ── 公开 API（与 SchemaCache 接口一致）───────────────────────────────────
+
+    def get_table_names(self) -> Optional[List[str]]:
+        try:
+            raw = self._client.get(self._key("table_names"))
+            if raw is None:
+                self._stats["misses"] += 1
+                return None
+            self._stats["hits"] += 1
+            return json.loads(raw)
+        except Exception as e:
+            logger.warning(f"[RedisSchemaCache] get_table_names error: {e}")
+            self._stats["misses"] += 1
+            return None
+
+    def set_table_names(self, names: List[str]) -> None:
+        try:
+            self._client.set(
+                self._key("table_names"),
+                json.dumps(names),
+                ex=self.ttl_seconds,
+            )
+        except Exception as e:
+            logger.warning(f"[RedisSchemaCache] set_table_names error: {e}")
+
+    def get_schema(self, table_names: List[str]) -> Optional[str]:
+        try:
+            key = self._key(f"schema:{self._make_table_key(table_names)}")
+            raw = self._client.get(key)
+            if raw is None:
+                self._stats["misses"] += 1
+                return None
+            self._stats["hits"] += 1
+            return raw
+        except Exception as e:
+            logger.warning(f"[RedisSchemaCache] get_schema error: {e}")
+            self._stats["misses"] += 1
+            return None
+
+    def set_schema(self, table_names: List[str], schema: str) -> None:
+        try:
+            key = self._key(f"schema:{self._make_table_key(table_names)}")
+            self._client.set(key, schema, ex=self.ttl_seconds)
+        except Exception as e:
+            logger.warning(f"[RedisSchemaCache] set_schema error: {e}")
+
+    def clear(self) -> None:
+        try:
+            pattern = self._key("*")
+            keys = self._client.keys(pattern)
+            if keys:
+                self._client.delete(*keys)
+            logger.info(f"[RedisSchemaCache] Cleared {len(keys)} keys")
+        except Exception as e:
+            logger.warning(f"[RedisSchemaCache] clear error: {e}")
+
+    @property
+    def stats(self) -> Dict:
+        total = self._stats["hits"] + self._stats["misses"]
+        return {
+            **self._stats,
+            "total": total,
+            "hit_rate": f"{self._stats['hits']/total*100:.1f}%" if total > 0 else "N/A",
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"RedisSchemaCache(ttl={self.ttl_seconds}s, "
+            f"prefix={self._prefix!r}, hit_rate={self.stats['hit_rate']})"
+        )
+
+
 class SQLDatabaseManager:
     """管理 SQL 数据库连接和操作，内置 Schema 缓存和安全护栏。"""
     
@@ -121,21 +239,58 @@ class SQLDatabaseManager:
         config: DatabaseConfig,
         cache_ttl: int = 300,
         security_config: Optional[SecurityConfig] = None,
+        schema_cache_config: Optional[SchemaCacheConfig] = None,
     ) -> None:
         """初始化数据库管理器。
         
         参数:
             config: 数据库配置
             cache_ttl: Schema 缓存 TTL（秒），默认 300 秒。设为 0 禁用缓存。
+                       当 schema_cache_config 指定时此参数被忽略。
             security_config: SQL 安全护栏配置。为 None 时禁用安全检查。
+            schema_cache_config: Schema 缓存后端配置。不传时使用内存缓存。
         """
         self.config = config
         self._db: Optional[SQLDatabase] = None
         self._dialect: Optional[DatabaseDialect] = None
-        self.schema_cache = SchemaCache(ttl_seconds=cache_ttl) if cache_ttl > 0 else None
+
+        # 根据 schema_cache_config 选择缓存后端
+        self.schema_cache = self._build_schema_cache(cache_ttl, schema_cache_config)
+
         # 安全护栏（延迟初始化，等数据库方言确定后再设置 dialect）
         self._security_config = security_config
         self._guard: Optional[SQLSecurityGuard] = None
+
+    @staticmethod
+    def _build_schema_cache(
+        fallback_ttl: int,
+        cfg: Optional[SchemaCacheConfig],
+    ) -> Optional[object]:
+        """根据配置构建合适的 schema 缓存实例。"""
+        if cfg is None:
+            # 兼容旧调用：用 fallback_ttl 构建内存缓存
+            return SchemaCache(ttl_seconds=fallback_ttl) if fallback_ttl > 0 else None
+
+        if cfg.backend == "redis":
+            try:
+                cache = RedisSchemaCache(
+                    host=cfg.redis_host,
+                    port=cfg.redis_port,
+                    db=cfg.redis_db,
+                    password=cfg.redis_password,
+                    ttl_seconds=cfg.ttl_seconds,
+                    key_prefix=cfg.redis_key_prefix,
+                )
+                return cache
+            except Exception as e:
+                logger.warning(
+                    f"[SchemaCache] Redis unavailable ({e}), "
+                    f"falling back to in-memory cache"
+                )
+                return SchemaCache(ttl_seconds=cfg.ttl_seconds)
+
+        # backend == "memory" 或其他未知值
+        return SchemaCache(ttl_seconds=cfg.ttl_seconds) if cfg.ttl_seconds > 0 else None
     
     @property
     def db(self) -> SQLDatabase:

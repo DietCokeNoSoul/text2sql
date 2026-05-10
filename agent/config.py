@@ -160,6 +160,35 @@ class RetrievalConfig:
 
 
 @dataclass
+class SchemaCacheConfig:
+    """Schema 缓存配置。
+
+    支持两种后端：
+    - memory : 纯内存（dict + TTL），进程重启后失效
+    - redis  : 持久化到 Redis，支持跨进程/多实例共享
+    """
+    backend: str = "memory"          # "memory" | "redis"
+    ttl_seconds: int = 300           # 缓存有效期（秒）
+    redis_host: str = "127.0.0.1"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: Optional[str] = None
+    redis_key_prefix: str = "text2sql:schema:"
+
+    @classmethod
+    def from_env(cls) -> "SchemaCacheConfig":
+        return cls(
+            backend=os.getenv("SCHEMA_CACHE_BACKEND", "memory"),
+            ttl_seconds=int(os.getenv("SCHEMA_CACHE_TTL", "300")),
+            redis_host=os.getenv("SCHEMA_CACHE_REDIS_HOST", "127.0.0.1"),
+            redis_port=int(os.getenv("SCHEMA_CACHE_REDIS_PORT", "6379")),
+            redis_db=int(os.getenv("SCHEMA_CACHE_REDIS_DB", "0")),
+            redis_password=os.getenv("SCHEMA_CACHE_REDIS_PASSWORD") or None,
+            redis_key_prefix=os.getenv("SCHEMA_CACHE_REDIS_PREFIX", "text2sql:schema:"),
+        )
+
+
+@dataclass
 class CacheConfig:
     """LLM 响应缓存配置。
 
@@ -190,6 +219,7 @@ class AgentConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
+    schema_cache: SchemaCacheConfig = field(default_factory=SchemaCacheConfig)
     
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "AgentConfig":
@@ -252,6 +282,7 @@ class AgentConfig:
             security=security_config,
             retrieval=RetrievalConfig.from_env(),
             cache=CacheConfig.from_env(),
+            schema_cache=SchemaCacheConfig.from_env(),
         )
     
     def validate(self) -> None:
