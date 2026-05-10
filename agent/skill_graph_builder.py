@@ -41,6 +41,14 @@ _GENERAL_CHAT_SYSTEM_PROMPT = """你是一个 Text-to-SQL 智能助手，专门�
 用户当前的问题不需要查询数据库，请友好地直接回答。
 如果用户想查询数据，可以告诉他们用自然语言描述需求，你会帮他们转换成 SQL 查询。"""
 
+# format_answer node system prompt — wraps raw SQL results into natural language
+_FORMAT_ANSWER_SYSTEM_PROMPT = """你是一个 Text-to-SQL 智能助手。
+根据用户的问题和 SQL 查询结果，用自然语言给出简洁、友好的回答。
+- 直接回答用户的问题，不要重复 SQL 语句
+- 如果结果是数字，说明含义（如"共有 1006 个用户"）
+- 如果结果是列表，摘要展示（不超过 10 条详细列出，更多则说明总数）
+- 使用中文回答"""
+
 
 class SkillBasedGraphBuilder:
     """
@@ -106,9 +114,10 @@ class SkillBasedGraphBuilder:
         
         # Initialize Skills
         logger.info("Initializing Skills...")
-        simple_skill = SimpleQuerySkill(llm, tool_manager, db_manager)
-        complex_skill = ComplexQuerySkill(llm, tool_manager, db_manager, retriever=self._retriever, plan_manager=self._plan_manager)
-        analysis_skill = DataAnalysisSkill(llm, tool_manager, db_manager, config=config, plan_manager=self._plan_manager)
+        confirm_enabled = config.sql_confirm_enabled
+        simple_skill = SimpleQuerySkill(llm, tool_manager, db_manager, confirm_enabled=confirm_enabled)
+        complex_skill = ComplexQuerySkill(llm, tool_manager, db_manager, retriever=self._retriever, plan_manager=self._plan_manager, confirm_enabled=confirm_enabled)
+        analysis_skill = DataAnalysisSkill(llm, tool_manager, db_manager, config=config, plan_manager=self._plan_manager, confirm_enabled=confirm_enabled)
         
         # Register all skills — descriptions loaded from SKILL.md automatically
         self.registry = SkillRegistry()
@@ -156,6 +165,9 @@ class SkillBasedGraphBuilder:
         skill_names = self.registry.list_skills()
         for name, skill in self.registry.get_all().items():
             graph.add_node(name, self._make_skill_node(skill))
+
+        # Final answer formatter — runs after every skill to produce natural language reply
+        graph.add_node("format_answer", self._format_answer_node)
         
         # ── Edges ─────────────────────────────────────────────────────────────
         graph.add_edge(START, "intent_router")
@@ -174,8 +186,10 @@ class SkillBasedGraphBuilder:
             self._route_to_skill,
             {name: name for name in skill_names},
         )
+        # All skills → format_answer → END
         for name in skill_names:
-            graph.add_edge(name, END)
+            graph.add_edge(name, "format_answer")
+        graph.add_edge("format_answer", END)
         
         if self.checkpointer:
             return graph.compile(checkpointer=self.checkpointer)
@@ -229,15 +243,33 @@ class SkillBasedGraphBuilder:
     def _route_intent(self, state: Dict[str, Any]) -> str:
         return state.get("query_intent", "db_query")
 
-    def _general_chat_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Direct LLM reply for non-database questions."""
+    async def _general_chat_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Direct LLM reply for non-database questions, with full conversation history."""
         logger.info("[General Chat] Responding without DB")
+        history = state.get("messages", [])
+        messages = [SystemMessage(content=_GENERAL_CHAT_SYSTEM_PROMPT)] + history
+        response = await self.llm.ainvoke(messages)
+        return {"messages": [response]}
+
+    async def _format_answer_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Format the raw SQL query result into a natural language answer."""
+        from langchain_core.messages import ToolMessage
+        messages = state.get("messages", [])
+        # Collect recent context: last human message + any tool results
         user_question = self._latest_human_message(state)
-        messages = [
-            SystemMessage(content=_GENERAL_CHAT_SYSTEM_PROMPT),
-            HumanMessage(content=user_question),
+        tool_results = [
+            m.content for m in messages
+            if isinstance(m, ToolMessage) and m.content
         ]
-        response = self.llm.invoke(messages)
+        if not tool_results:
+            # No SQL result — nothing to format, skip
+            return {}
+        result_text = "\n".join(tool_results[-3:])  # at most last 3 tool outputs
+        format_messages = [
+            SystemMessage(content=_FORMAT_ANSWER_SYSTEM_PROMPT),
+            HumanMessage(content=f"用户问题：{user_question}\n\nSQL 查询结果：\n{result_text}"),
+        ]
+        response = await self.llm.ainvoke(format_messages)
         return {"messages": [response]}
 
     # ── L2: Skill routing ─────────────────────────────────────────────────────

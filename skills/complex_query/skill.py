@@ -48,10 +48,12 @@ class ComplexQuerySkill(BaseSkill):
         db_manager: SQLDatabaseManager,
         retriever: Optional[object] = None,   # DualTowerRetriever instance
         plan_manager: Optional[object] = None, # SessionPlanManager instance
+        confirm_enabled: bool = False,
     ):
         self.db_manager = db_manager
         self._retriever = retriever
         self._plan_manager = plan_manager
+        self.confirm_enabled = confirm_enabled
         self.simple_query_tool = None  # Will be set by main graph if needed
         
         _md = Path(__file__).parent / "SKILL.md"
@@ -350,6 +352,28 @@ If the question is simple (single table, single query), output:
             # Replace placeholders with actual results from dependencies
             query = self._resolve_query_placeholders(query, step.get("depends_on", []), step_results)
             
+            # ── SQL 执行前用户确认 ────────────────────────────────────────────
+            if self.confirm_enabled and query:
+                from agent.sql_confirm import prompt_sql_confirmation, build_skip_message
+                from agent.types import SQLSkippedByUser
+                action, reason = prompt_sql_confirmation(query)
+                if action == "skip":
+                    skip_content = build_skip_message(query, reason)
+                    logger.info(f"[ComplexQuery] Step {step_id} skipped by user")
+                    step_results[step_id] = {
+                        "step_id": step_id,
+                        "description": step["description"],
+                        "query": query,
+                        "original_query": step["query"],
+                        "result": skip_content,
+                        "success": False,
+                        "skipped": True,
+                        "retries": 0,
+                    }
+                    if self._plan_manager and task_id:
+                        self._plan_manager.update_step(task_id, step_id, "skipped")
+                    continue
+
             # Execute query with automatic error correction (up to 2 retries)
             query_tool = self.tool_manager.get_query_tool()
             exec_result = execute_with_correction(

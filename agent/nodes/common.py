@@ -61,18 +61,13 @@ class CommonNodes:
                 
                 logger.info(f"Listed tables: {tool_message.content}")
                 
-                # 返回消息更新
-                messages = state.get("messages", [])
-                messages.extend([tool_call_message, tool_message, response])
-                
-                return {"messages": messages}
+                # 只返回新增消息，add_messages reducer 会负责追加到历史
+                return {"messages": [tool_call_message, tool_message, response]}
                 
             except Exception as e:
                 logger.error(f"Error in list tables node: {e}")
                 error_message = AIMessage(f"Error listing tables: {str(e)}")
-                messages = state.get("messages", [])
-                messages.append(error_message)
-                return {"messages": messages}
+                return {"messages": [error_message]}
         
         return list_tables
     
@@ -107,22 +102,17 @@ class CommonNodes:
                 
                 logger.info(f"Schema retrieval completed ({len(schema)} characters)")
                 
-                # 将 schema 添加到消息和状态
-                messages = state.get("messages", [])
+                # 只返回新增消息，add_messages reducer 会负责追加到历史
                 schema_message = AIMessage(content=f"Database schema:\n{schema}")
-                messages.append(schema_message)
-                
                 return {
-                    "messages": messages,
+                    "messages": [schema_message],
                     "table_schema": schema
                 }
                 
             except Exception as e:
                 logger.error(f"Error in get schema node: {e}")
                 error_message = AIMessage(content=f"Error retrieving schema: {str(e)}")
-                messages = state.get("messages", [])
-                messages.append(error_message)
-                return {"messages": messages, "table_schema": ""}
+                return {"messages": [error_message], "table_schema": ""}
         
         return get_schema
     
@@ -141,12 +131,12 @@ class CommonNodes:
                 messages = state.get("messages", [])
                 if not messages:
                     logger.warning("No messages in state")
-                    return {"messages": messages}
+                    return {"messages": []}
                 
                 last_message = messages[-1]
                 if not hasattr(last_message, "tool_calls") or not last_message.tool_calls:
                     logger.warning("No tool calls found in last message")
-                    return {"messages": messages}
+                    return {"messages": []}
                 
                 # 执行查询工具
                 query_tool_node = self.tool_manager.get_query_node()
@@ -158,9 +148,7 @@ class CommonNodes:
             except Exception as e:
                 logger.error(f"Error in execute query node: {e}")
                 error_message = AIMessage(f"Error executing query: {str(e)}")
-                messages = state.get("messages", [])
-                messages.append(error_message)
-                return {"messages": messages}
+                return {"messages": [error_message]}
         
         return execute_query
     
@@ -213,21 +201,16 @@ class CommonNodes:
                 
                 logger.info(f"Batch execution completed: {len(results)} queries")
                 
-                # 更新消息
-                messages = state.get("messages", [])
+                # 只返回新增消息
                 summary = f"✅ 执行了 {len(results)} 个查询，成功 {sum(1 for r in results if r['status'] == 'success')} 个"
-                messages.append(AIMessage(content=summary))
-                
                 return {
                     "query_results": results,
-                    "messages": messages
+                    "messages": [AIMessage(content=summary)]
                 }
                 
             except Exception as e:
                 logger.error(f"Error in batch execute node: {e}")
                 error_message = AIMessage(f"Error in batch execution: {str(e)}")
-                messages = state.get("messages", [])
-                messages.append(error_message)
-                return {"messages": messages, "query_results": []}
+                return {"messages": [error_message], "query_results": []}
         
         return batch_execute_queries

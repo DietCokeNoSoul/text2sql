@@ -41,6 +41,10 @@
 31. [阶段二十七：语义查询缓存](#31-阶段二十七语义查询缓存)
 32. [阶段二十八：Redis Schema 缓存](#32-阶段二十八redis-schema-缓存)
 33. [阶段二十九：列映射缓存扩展](#33-阶段二十九列映射缓存扩展)
+34. [阶段三十：多轮对话记忆修复](#34-阶段三十多轮对话记忆修复)
+35. [阶段三十一：语义查询缓存移除](#35-阶段三十一语义查询缓存移除)
+36. [阶段三十二：异步流式输出修复](#36-阶段三十二异步流式输出修复)
+37. [阶段三十三：流式输出内容显示修复](#37-阶段三十三流式输出内容显示修复)
 
 ---
 
@@ -2405,3 +2409,246 @@ get_column_map()
 | `agent/database.py` | `SQLDatabaseManager.get_column_map()`：从无缓存改为先查缓存，MISS 再 inspect，结果写回缓存 |
 
 *最后更新：2026-05-10（新增第33章：列映射缓存扩展）*
+
+---
+
+## 34. 阶段三十：多轮对话记忆修复
+
+### 背景
+
+用户反映多轮对话下 Agent 没有记忆：每次回复都不知道上一轮问了什么。
+
+### 根因分析（三处缺陷）
+
+**缺陷 1：`SqliteSaver.setup()` 从未被调用**
+
+```python
+# 旧代码
+_checkpoint_conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
+checkpointer = SqliteSaver(_checkpoint_conn)
+# ← 从未调用 checkpointer.setup()
+```
+
+`SqliteSaver.setup()` 负责在 `checkpoints.db` 中建表（`checkpoints`、`checkpoint_blobs` 等）。不调用则表永远不存在，LangGraph 写入时静默失败，每轮对话都从空状态开始。
+
+**缺陷 2：`general_chat_node` 丢弃历史**
+
+```python
+# 旧代码 — 只传当前消息，历史全丢
+messages = [SystemMessage(...), HumanMessage(question)]
+response = self.llm.invoke(messages)
+```
+
+即使 checkpointer 正常保存状态，`general_chat_node` 构建 LLM 上下文时只放了当前问题，历史消息完全被忽略，LLM 自然不知道之前聊了什么。
+
+**缺陷 3：`CommonNodes` 消息列表原地变异**
+
+```python
+# 旧代码 — 在 state 的 list 上直接 extend/append 再返回整个列表
+messages = state.get("messages", [])
+messages.extend(new_msgs)           # 原地修改了 state 引用
+return {"messages": messages}       # 返回完整列表
+```
+
+LangGraph 的 `add_messages` reducer 期望节点只返回**新增的**消息。返回完整列表会造成消息重复追加，最终触发消息 ID 冲突或状态损坏。
+
+### 解决方案
+
+| 缺陷 | 修复 |
+|------|------|
+| 1 | 在 `graph.py` 启动时调用 `checkpointer.setup()` |
+| 2 | `_general_chat_node` 改为 `[SystemMessage] + state["messages"]`（完整历史） |
+| 3 | 所有节点改为只返回 `{"messages": [new_msg]}`（新消息列表，不含旧历史）|
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `agent/graph.py` | 调用 `checkpointer.setup()` |
+| `agent/skill_graph_builder.py` | `_general_chat_node` 传入完整历史 |
+| `agent/nodes/common.py` | 所有节点只返回新增消息 |
+
+---
+
+## 35. 阶段三十一：语义查询缓存移除
+
+### 问题发现
+
+语义缓存（`SemanticQueryCache`）在多轮对话场景下产生**严重误报**：
+
+- 用户问"我刚刚问的什么问题？" → 语义相似度命中之前某个 DB 查询结果 → 返回错误答案
+- 每次"上一个问题"都不同，但缓存键是语义向量，相似度高于阈值就命中
+- 数据库数据更新后，缓存的答案与实际不符
+
+### 决策：移除
+
+语义缓存的设计假设"相似问题有相同答案"，这对**上下文相关**的追问问题完全不成立。LLM 精确缓存（`SQLiteCache`）只命中完全相同的 prompt，不会产生误报，已足够满足需求。
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `agent/query_cache.py` | **删除**整个文件 |
+| `.query_cache.db` | **删除** |
+| `agent/graph.py` | 移除所有 `_query_cache` 引用（约 25 行）|
+
+### 缓存体系（移除后）
+
+| 层级 | 类型 | 命中条件 |
+|------|------|---------|
+| LLM 响应缓存 | 精确匹配 | prompt 完全一致（`SQLiteCache`）|
+| Schema 缓存 | 对象缓存 | 同一批表名（内存 TTL / Redis）|
+| ❌ ~~语义查询缓存~~ | ~~语义相似~~ | ~~已移除~~ |
+
+---
+
+## 36. 阶段三十二：异步流式输出修复
+
+### 背景
+
+用户切换到 token 级流式模式（`stream`）后，出现三个连续错误，逐一排查解决。
+
+### 问题 1：`SqliteSaver` 不支持异步
+
+```
+Streaming error: The SqliteSaver does not support async methods.
+Consider using AsyncSqliteSaver instead.
+```
+
+**原因**：`astream_events` 是异步函数，需要 async-compatible checkpointer。`SqliteSaver`（同步 SQLite）在异步上下文中调用会直接抛错。
+
+**修复**：安装 `aiosqlite`，为流式模式引入独立的 `AsyncSqliteSaver`。实现懒初始化（`_get_async_graph()`），在首次流式调用时在 async 上下文中创建。
+
+### 问题 2：`_AsyncGeneratorContextManager` 不是合法 checkpointer
+
+```
+TypeError: Invalid checkpointer provided. Expected an instance of BaseCheckpointSaver.
+Received _AsyncGeneratorContextManager.
+```
+
+**原因**：`AsyncSqliteSaver.from_conn_string()` 返回的是异步上下文管理器（需 `async with` 使用），不能直接传给 `graph.compile(checkpointer=...)`。
+
+**修复**：改为 `aiosqlite.connect()` 直接创建连接，再手动实例化 `AsyncSqliteSaver(conn)`。
+
+### 问题 3：Lock 绑定到不同事件循环
+
+```
+Streaming error: <asyncio.locks.Lock object> is bound to a different event loop
+```
+
+**原因**：`asyncio.run()` 每次调用都创建并销毁一个新事件循环；`aiosqlite` 内部的 `asyncio.Lock` 在第一次创建时绑定到当时的循环，第二次 `asyncio.run()` 换了新循环，Lock 就失效了。
+
+**修复**：模块级创建持久事件循环 `_persistent_loop = asyncio.new_event_loop()`，所有流式调用通过 `_persistent_loop.run_until_complete()` 执行，保证 aiosqlite 连接和 Lock 始终在同一个循环中运行。
+
+### 架构：双图设计
+
+| 图 | 变量 | Checkpointer | 用途 |
+|----|------|-------------|------|
+| 同步图 | `graph` | `SqliteSaver` | `run_query()`（节点级流式）|
+| 异步图 | `_async_graph` | `AsyncSqliteSaver` | `run_query_streaming_async()`（token 级）|
+
+两个图共享同一个 `checkpoints.db` 文件和 `thread_id`，会话历史互通。
+
+### 新增依赖
+
+```
+aiosqlite>=0.20
+```
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `agent/graph.py` | 新增 `_get_async_graph()` 懒初始化；新增 `_persistent_loop`；`run_query_streaming` 改用 `_persistent_loop.run_until_complete()` |
+| `pyproject.toml` | 新增 `aiosqlite>=0.20` |
+
+---
+
+## 37. 阶段三十三：流式输出内容显示修复
+
+### 问题
+
+Token 级流式模式下节点头部（路由信息）正常打印，但 Agent 的最终回答内容从未出现：
+
+```
+───────────────────────────────────────────────────────
+  💬 普通对话
+───────────────────────────────────────────────────────
+                          ← 这里应有 LLM 回答，但是空白
+
+═══════════════════════════════════════════════════════
+  ✅ 流式输出完成
+```
+
+### 根因分析
+
+**原因 1：节点同步调用不产生 token 事件**
+
+`_general_chat_node` 和各 Skill 节点内部使用同步 `self.llm.invoke()`，LangGraph 将同步函数放入线程池执行，无法向父图的 `astream_events` 传播 `on_chat_model_stream` 事件。
+
+**原因 2：Skill 结束于 ToolMessage**
+
+`simple_query` 执行完 SQL 后，最后一条消息是 `ToolMessage`（原始 SQL 结果，如 `[(1006,)]`），没有自然语言总结节点，导致没有任何 AI 回答可以显示。
+
+### 解决方案
+
+**方案 1：将 `general_chat_node` 改为 async**
+
+```python
+# 旧
+def _general_chat_node(self, state):
+    response = self.llm.invoke(messages)
+
+# 新
+async def _general_chat_node(self, state):
+    response = await self.llm.ainvoke(messages)
+```
+
+async 节点在 event loop 中直接执行，LangChain 的回调系统正确传播 `on_chat_model_stream` 事件。
+
+**方案 2：新增 `format_answer` 异步节点**
+
+在所有 Skill 之后（Skill → `format_answer` → END）插入答案格式化节点：
+
+```python
+async def _format_answer_node(self, state):
+    """将原始 SQL 结果转为自然语言回答。"""
+    tool_results = [m.content for m in messages if isinstance(m, ToolMessage)]
+    if not tool_results:
+        return {}   # 无 SQL 结果则跳过
+    response = await self.llm.ainvoke([SystemMessage, HumanMessage(question + results)])
+    return {"messages": [response]}
+```
+
+**方案 3：事件循环回退兜底**
+
+streaming 循环结束后，若 `final_message` 为空，从 graph snapshot 中提取最后一条 AI 消息作为回退输出：
+
+```python
+if not final_message:
+    for msg in reversed(snapshot.messages):
+        if isinstance(msg, AIMessage) and msg.content:
+            final_message = msg.content
+            print(final_message)
+            break
+```
+
+### 最终图结构
+
+```
+START → intent_router
+          ├─ general_chat  →  [async] general_chat_node  → END
+          └─ db_query      →  skill_router
+                                ├─ simple_query  →  \
+                                ├─ complex_query →   ├─ [async] format_answer → END
+                                └─ data_analysis →  /
+```
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `agent/skill_graph_builder.py` | `_general_chat_node` 改为 `async`；新增 `_format_answer_node`（async）；新增 `_FORMAT_ANSWER_SYSTEM_PROMPT`；图边：所有 skill → `format_answer` → END |
+| `agent/graph.py` | `_NODE_LABELS` 新增 `format_answer: "💡 生成回答"`；streaming 循环中 `on_chat_model_end` 增加无 token 流回退逻辑；snapshot 读取后增加 `final_message` 兜底提取 |
+
+*最后更新：2026-05-10（新增第34–37章：记忆修复 / 语义缓存移除 / 异步流式修复 / 流式输出显示修复）*

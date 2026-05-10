@@ -28,6 +28,7 @@ from langchain_community.cache import SQLiteCache
 from langchain_core.globals import set_llm_cache
 import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from .config import get_config
 from .skill_graph_builder import create_skill_based_graph as create_sql_agent_graph
@@ -58,6 +59,7 @@ _NODE_LABELS: dict[str, str] = {
     "execute_query":        "▶️  执行查询",
     "format_result":        "🖨  格式化输出",
     "error_correction":     "🔧 错误修复",
+    "format_answer":        "💡 生成回答",
 }
 
 
@@ -113,22 +115,15 @@ if config.cache.enabled and config.cache.backend == "sqlite":
     except Exception as e:
         logger.warning(f"Failed to initialize LLM cache: {e}")
 
-# 初始化语义查询缓存（仅在 cache 启用时开启）
-from .query_cache import init_query_cache, get_query_cache
-_query_cache = None
-if config.cache.enabled:
-    try:
-        _query_cache = init_query_cache()
-        logger.info("Semantic query cache enabled")
-    except Exception as e:
-        logger.warning(f"Failed to initialize semantic query cache: {e}")
-
 # 创建持久化检查点保存器（对话记忆写入本地 SQLite 文件）
 _CHECKPOINT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "checkpoints.db")
+
+# 同步图（供 run_query 使用）
 _checkpoint_conn = sqlite3.connect(_CHECKPOINT_DB, check_same_thread=False)
 checkpointer = SqliteSaver(_checkpoint_conn)
+checkpointer.setup()  # 确保 SQLite 表已创建，否则首次使用时静默失败
 
-# 创建图（带记忆功能）
+# 创建同步图
 try:
     graph = create_sql_agent_graph(config, llm, checkpointer=checkpointer)
     logger.info("SQL Agent graph created successfully with memory support")
@@ -136,9 +131,28 @@ except Exception as e:
     logger.error(f"Failed to create graph: {e}")
     raise
 
+# 异步图（供 run_query_streaming_async 使用）懒初始化
+# AsyncSqliteSaver 必须在 async 上下文中创建，故此处只声明，首次调用时初始化
+_async_graph = None
+
+async def _get_async_graph():
+    """懒初始化异步图，确保 AsyncSqliteSaver 在 async 上下文中创建。"""
+    global _async_graph
+    if _async_graph is None:
+        import aiosqlite
+        conn = await aiosqlite.connect(_CHECKPOINT_DB)
+        async_checkpointer = AsyncSqliteSaver(conn)
+        await async_checkpointer.setup()
+        _async_graph = create_sql_agent_graph(config, llm, checkpointer=async_checkpointer)
+        logger.info("Async graph initialized with AsyncSqliteSaver")
+    return _async_graph
+
 
 # 导出图供 LangGraph CLI 使用
 __all__ = ["graph", "config", "run_query", "run_query_streaming"]
+
+# 持久事件循环：避免 asyncio.run() 每次销毁循环导致 aiosqlite Lock 跨循环失效
+_persistent_loop = asyncio.new_event_loop()
 
 
 # ── 内部工具函数 ───────────────────────────────────────────────────────────
@@ -195,20 +209,6 @@ def run_query(question: str, thread_id: str) -> dict:
     """
     logger.info(f"Running query (thread={thread_id}): {question}")
 
-    # ── 语义缓存查找 ──────────────────────────────────────────────────────────
-    if _query_cache:
-        cached = _query_cache.lookup(question)
-        if cached:
-            print(f"\n{'═' * 55}")
-            print(f"  ⚡ 语义缓存命中 (相似度={cached['_cache_score']:.2%})")
-            print(f"  匹配问题: {cached['_cache_question'][:50]}...")
-            print(f"{'═' * 55}")
-            print(cached.get("final_message", ""))
-            print(f"\n{'═' * 55}")
-            print("  ✅ 缓存结果返回（0 LLM 调用）")
-            print(f"{'═' * 55}\n")
-            return cached
-
     config_with_thread = {"configurable": {"thread_id": thread_id}}
 
     print(f"\n{'═' * 55}")
@@ -246,18 +246,41 @@ def run_query(question: str, thread_id: str) -> dict:
         logger.error(f"Error running query: {e}")
         raise
 
+    # ── 跳过信号处理 ──────────────────────────────────────────────────────────
+    if config.sql_confirm_enabled:
+        from agent.sql_confirm import parse_skip_signal, analyze_sql_skip, SKIP_SIGNAL_TAG
+        if SKIP_SIGNAL_TAG in final_message:
+            sql, reason = parse_skip_signal(final_message)
+            if sql:
+                print(f"\n{'═' * 55}")
+                print("  🔍 正在分析跳过的 SQL …")
+                print(f"{'═' * 55}")
+                analysis = analyze_sql_skip(sql, reason, _base_llm)
+                print(f"\n{analysis}\n")
+                print(f"{'─' * 55}")
+                print("  [C] Continue — 让 LLM 重新尝试回答")
+                print("  [A] Abort    — 放弃本次查询")
+                print(f"{'─' * 55}")
+                try:
+                    choice = input("  请选择 [C/A]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    choice = "a"
+                if choice in ("c", "continue"):
+                    print("\n  ♻️  正在重新尝试 …\n")
+                    return run_query(question, thread_id)
+                else:
+                    final_message = "查询已中止（SQL 被用户跳过）。"
+                    print(f"{'═' * 55}")
+                    print("  ❌ 查询已中止")
+                    print(f"{'═' * 55}\n")
+
     result = {
         "final_message": final_message,
         "nodes_visited": nodes_visited,
         "export_files": export_files,
     }
 
-    # ── 存入语义缓存 ──────────────────────────────────────────────────────────
-    if _query_cache:
-        _query_cache.store(question, result)
-
     return result
-
 
 # ── 异步 token 级流式查询 ──────────────────────────────────────────────────
 
@@ -265,17 +288,7 @@ async def run_query_streaming_async(question: str, thread_id: str) -> dict:
     """异步 token 级流式输出（astream_events）。"""
     logger.info(f"Streaming query (thread={thread_id}): {question}")
 
-    # ── 语义缓存查找（流式模式同样受益）────────────────────────────────────────
-    if _query_cache:
-        cached = _query_cache.lookup(question)
-        if cached:
-            print(f"\n{'═' * 55}")
-            print(f"  ⚡ 语义缓存命中 (相似度={cached['_cache_score']:.2%})")
-            print(f"  匹配问题: {cached['_cache_question'][:50]}...")
-            print(f"{'═' * 55}")
-            print(cached.get("final_message", ""))
-            return cached
-
+    a_graph = await _get_async_graph()
     config_with_thread = {"configurable": {"thread_id": thread_id}}
 
     print(f"\n{'═' * 55}")
@@ -288,7 +301,7 @@ async def run_query_streaming_async(question: str, thread_id: str) -> dict:
     final_message: str = ""
 
     try:
-        async for event in graph.astream_events(
+        async for event in a_graph.astream_events(
             {"messages": [{"role": "user", "content": question}]},
             config_with_thread,
             version="v2",
@@ -307,35 +320,79 @@ async def run_query_streaming_async(question: str, thread_id: str) -> dict:
                     print(f"  {label}")
                     print(f"{'─' * 55}")
 
-            # LLM token 实时输出
+            # LLM token 实时输出（仅当 LLM 支持流式时触发）
             elif kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
                 if chunk and hasattr(chunk, "content") and chunk.content:
                     print(chunk.content, end="", flush=True)
                     token_buf.append(chunk.content)
 
-            # LLM 调用结束（换行，保存最终消息）
+            # LLM 调用结束
             elif kind == "on_chat_model_end":
-                print()
                 if token_buf:
+                    # 有 token 流：拼接并换行
                     final_message = "".join(token_buf)
                     token_buf = []
+                    print()
+                else:
+                    # 同步 invoke（无 token 流）：从 end 事件提取完整内容
+                    output = event.get("data", {}).get("output")
+                    if output and hasattr(output, "content") and output.content:
+                        final_message = output.content
+                        print(final_message)
 
     except Exception as e:
         logger.error(f"Streaming error: {e}")
         raise
 
-    # Retrieve final graph state to extract export_files (not available in event stream)
+    # Retrieve final graph state to extract export_files and fallback answer
     export_files: list[str] = []
     try:
-        snapshot = await graph.aget_state(config_with_thread)
+        snapshot = await a_graph.aget_state(config_with_thread)
         if snapshot:
             export_files = snapshot.values.get("export_files", [])
+            # Fallback: if no content was printed via token events, show the last AI message
+            if not final_message:
+                from langchain_core.messages import AIMessage as _AI
+                msgs = snapshot.values.get("messages", [])
+                for msg in reversed(msgs):
+                    if isinstance(msg, _AI) and msg.content and not getattr(msg, "tool_calls", None):
+                        final_message = msg.content
+                        print(final_message)
+                        break
     except Exception as e:
         logger.warning(f"Failed to retrieve graph state after streaming: {e}")
 
     print(f"\n{'═' * 55}")
     print("  ✅ 流式输出完成")
+
+    # ── 跳过信号处理（异步模式） ──────────────────────────────────────────────
+    if config.sql_confirm_enabled:
+        from agent.sql_confirm import parse_skip_signal, analyze_sql_skip, SKIP_SIGNAL_TAG
+        if SKIP_SIGNAL_TAG in final_message:
+            sql, reason = parse_skip_signal(final_message)
+            if sql:
+                print(f"\n{'═' * 55}")
+                print("  🔍 正在分析跳过的 SQL …")
+                print(f"{'═' * 55}")
+                analysis = analyze_sql_skip(sql, reason, _base_llm)
+                print(f"\n{analysis}\n")
+                print(f"{'─' * 55}")
+                print("  [C] Continue — 让 LLM 重新尝试回答")
+                print("  [A] Abort    — 放弃本次查询")
+                print(f"{'─' * 55}")
+                try:
+                    choice = input("  请选择 [C/A]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    choice = "a"
+                if choice in ("c", "continue"):
+                    print("\n  ♻️  正在重新尝试 …\n")
+                    return await run_query_streaming_async(question, thread_id)
+                else:
+                    final_message = "查询已中止（SQL 被用户跳过）。"
+                    print(f"{'═' * 55}")
+                    print("  ❌ 查询已中止")
+                    print(f"{'═' * 55}\n")
 
     result = {
         "final_message": final_message,
@@ -343,20 +400,17 @@ async def run_query_streaming_async(question: str, thread_id: str) -> dict:
         "export_files": export_files,
     }
 
-    # ── 存入语义缓存 ──────────────────────────────────────────────────────────
-    if _query_cache:
-        _query_cache.store(question, result)
-
     return result
 
 
 def run_query_streaming(question: str, thread_id: str) -> dict:
     """同步入口：调用异步 token 级流式输出。
 
-    对外提供与 run_query() 相同签名的同步接口，内部使用 asyncio 运行异步版本。
+    对外提供与 run_query() 相同签名的同步接口，内部使用持久事件循环运行异步版本。
+    使用持久循环（而非 asyncio.run）避免 aiosqlite Lock 跨循环失效的问题。
     返回与 run_query() 相同的结构化 dict。
     """
-    return asyncio.run(run_query_streaming_async(question, thread_id))
+    return _persistent_loop.run_until_complete(run_query_streaming_async(question, thread_id))
 
 
 # ── 主循环 ─────────────────────────────────────────────────────────────────

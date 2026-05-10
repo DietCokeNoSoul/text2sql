@@ -84,10 +84,12 @@ class DataAnalysisSkill(BaseSkill):
         db_manager: SQLDatabaseManager,
         config: Optional[AgentConfig] = None,
         plan_manager: Optional[object] = None,  # SessionPlanManager instance
+        confirm_enabled: bool = False,
     ):
         self.db_manager = db_manager
         self._output_config: OutputConfig = config.output if config else OutputConfig()
         self._plan_manager = plan_manager
+        self.confirm_enabled = confirm_enabled
         
         _md = Path(__file__).parent / "SKILL.md"
         super().__init__(
@@ -518,6 +520,26 @@ Output format:
             step_id = query_data.get("step_id")
             description = query_data.get("description")
             sql = query_data.get("query")
+
+            # ── SQL 执行前用户确认 ────────────────────────────────────────────
+            if self.confirm_enabled and sql:
+                from agent.sql_confirm import prompt_sql_confirmation, build_skip_message
+                action, reason = prompt_sql_confirmation(sql)
+                if action == "skip":
+                    skip_content = build_skip_message(sql, reason)
+                    logger.info(f"[DataAnalysis] Step {step_id} skipped by user")
+                    query_results.append({
+                        "step_id": step_id,
+                        "description": description,
+                        "query": sql,
+                        "original_query": sql,
+                        "result": skip_content,
+                        "success": False,
+                        "skipped": True,
+                        "retries": 0,
+                    })
+                    insights.append({"step_id": step_id, "insight": "SQL已被用户跳过"})
+                    continue
 
             # Execute with automatic SQL error correction (up to 2 retries)
             exec_result = execute_with_correction(

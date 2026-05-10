@@ -30,7 +30,8 @@ class SimpleQuerySkill(BaseSkill):
         self,
         llm: BaseChatModel,
         tool_manager: SQLToolManager,
-        db_manager: SQLDatabaseManager
+        db_manager: SQLDatabaseManager,
+        confirm_enabled: bool = False,
     ):
         """初始化 Simple Query Skill。
         
@@ -38,8 +39,10 @@ class SimpleQuerySkill(BaseSkill):
             llm: 语言模型
             tool_manager: 工具管理器
             db_manager: 数据库管理器
+            confirm_enabled: 是否在执行 SQL 前等待用户确认
         """
         self.db_manager = db_manager
+        self.confirm_enabled = confirm_enabled
         
         _md = Path(__file__).parent / "SKILL.md"
         super().__init__(
@@ -192,6 +195,14 @@ class SimpleQuerySkill(BaseSkill):
                 tool_call = last_message.tool_calls[0]
                 sql_query = tool_call.get("args", {}).get("query", "")
             
+            # ── SQL 执行前用户确认 ────────────────────────────────────────────
+            if self.confirm_enabled and sql_query:
+                from agent.sql_confirm import prompt_sql_confirmation, build_skip_message
+                from agent.types import SQLSkippedByUser
+                action, reason = prompt_sql_confirmation(sql_query)
+                if action == "skip":
+                    raise SQLSkippedByUser(sql_query, reason)
+
             # 执行查询
             try:
                 result = self.db_manager.execute_query(sql_query)
@@ -216,6 +227,9 @@ class SimpleQuerySkill(BaseSkill):
                 }
                 
             except Exception as exec_error:
+                from agent.types import SQLSkippedByUser
+                if isinstance(exec_error, SQLSkippedByUser):
+                    raise  # 向外层传递，避免被当作普通错误重试
                 # 执行失败，捕获错误
                 error_msg = str(exec_error)
                 logger.warning(f"[SimpleQuery] Query execution failed: {error_msg}")
@@ -237,6 +251,20 @@ class SimpleQuerySkill(BaseSkill):
                 }
                 
         except Exception as e:
+            from agent.types import SQLSkippedByUser
+            from agent.sql_confirm import build_skip_message
+            if isinstance(e, SQLSkippedByUser):
+                logger.info(f"[SimpleQuery] SQL skipped by user: {e.sql[:60]}")
+                skip_msg_content = build_skip_message(e.sql, e.reason)
+                from langchain_core.messages import AIMessage
+                messages = state.get("messages", [])
+                messages.append(AIMessage(content=skip_msg_content))
+                return {
+                    "messages": messages,
+                    "retry_count": 999,  # 阻止重试
+                    "last_error": "skipped_by_user",
+                    "last_sql": e.sql,
+                }
             logger.error(f"[SimpleQuery] Error in execute_with_error_capture: {e}")
             return state
     
@@ -248,6 +276,11 @@ class SimpleQuerySkill(BaseSkill):
         # 如果没有错误，结束
         if not last_error:
             logger.info("[SimpleQuery] Query succeeded, ending")
+            return "end"
+        
+        # 用户跳过 SQL，不重试
+        if last_error == "skipped_by_user":
+            logger.info("[SimpleQuery] SQL skipped by user, ending without retry")
             return "end"
         
         # 如果重试次数超过3次，结束

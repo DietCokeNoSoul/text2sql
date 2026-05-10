@@ -220,6 +220,7 @@ class AgentConfig:
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
     schema_cache: SchemaCacheConfig = field(default_factory=SchemaCacheConfig)
+    sql_confirm_enabled: bool = False  # SQL 执行前等待用户确认
     
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "AgentConfig":
@@ -283,6 +284,7 @@ class AgentConfig:
             retrieval=RetrievalConfig.from_env(),
             cache=CacheConfig.from_env(),
             schema_cache=SchemaCacheConfig.from_env(),
+            sql_confirm_enabled=os.getenv("SQL_CONFIRM_ENABLED", "false").lower() == "true",
         )
     
     def validate(self) -> None:

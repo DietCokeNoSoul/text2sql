@@ -91,3 +91,17 @@ class SecurityViolationError(SQLAgentError):
     
     def __str__(self) -> str:
         return f"[{self.layer}] {self.reason}"
+
+
+class SQLSkippedByUser(SQLAgentError):
+    """用户在确认对话框中选择跳过 SQL 执行时抛出。
+
+    属性:
+        sql:    被跳过的 SQL 语句
+        reason: 用户填写的跳过原因（可为空）
+    """
+
+    def __init__(self, sql: str, reason: str = "") -> None:
+        self.sql = sql
+        self.reason = reason
+        super().__init__(f"SQL execution skipped by user. SQL: {sql[:100]}")
