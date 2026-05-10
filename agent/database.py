@@ -39,6 +39,7 @@ class SchemaCache:
         self.ttl_seconds = ttl_seconds
         self._table_names_cache: Optional[Tuple[List[str], float]] = None
         self._schema_cache: Dict[str, Tuple[str, float]] = {}
+        self._column_map_cache: Optional[Tuple[Dict[str, List[str]], float]] = None
         self._stats = {"hits": 0, "misses": 0}
     
     def _is_expired(self, timestamp: float) -> bool:
@@ -92,10 +93,28 @@ class SchemaCache:
         """生成缓存 key（排序后的表名，保证顺序无关）。"""
         return ",".join(sorted(t.strip() for t in table_names))
     
+    def get_column_map(self) -> Optional[Dict[str, List[str]]]:
+        """获取缓存的列名映射 {表名: [列名, ...]}。"""
+        if self._column_map_cache is None:
+            self._stats["misses"] += 1
+            return None
+        col_map, ts = self._column_map_cache
+        if self._is_expired(ts):
+            self._column_map_cache = None
+            self._stats["misses"] += 1
+            return None
+        self._stats["hits"] += 1
+        return col_map
+
+    def set_column_map(self, col_map: Dict[str, List[str]]) -> None:
+        """缓存列名映射。"""
+        self._column_map_cache = (col_map, time.time())
+
     def clear(self) -> None:
         """清空所有缓存。"""
         self._table_names_cache = None
         self._schema_cache.clear()
+        self._column_map_cache = None
         logger.info("[SchemaCache] Cache cleared")
     
     @property
@@ -204,6 +223,29 @@ class RedisSchemaCache:
             self._client.set(key, schema, ex=self.ttl_seconds)
         except Exception as e:
             logger.warning(f"[RedisSchemaCache] set_schema error: {e}")
+
+    def get_column_map(self) -> Optional[Dict[str, List[str]]]:
+        try:
+            raw = self._client.get(self._key("column_map"))
+            if raw is None:
+                self._stats["misses"] += 1
+                return None
+            self._stats["hits"] += 1
+            return json.loads(raw)
+        except Exception as e:
+            logger.warning(f"[RedisSchemaCache] get_column_map error: {e}")
+            self._stats["misses"] += 1
+            return None
+
+    def set_column_map(self, col_map: Dict[str, List[str]]) -> None:
+        try:
+            self._client.set(
+                self._key("column_map"),
+                json.dumps(col_map),
+                ex=self.ttl_seconds,
+            )
+        except Exception as e:
+            logger.warning(f"[RedisSchemaCache] set_column_map error: {e}")
 
     def clear(self) -> None:
         try:
@@ -476,14 +518,21 @@ class SQLDatabaseManager:
         
     
     def get_column_map(self) -> Dict[str, List[str]]:
-        """获取所有表的列名映射 {表名: [列名, ...]}。
+        """获取所有表的列名映射 {表名: [列名, ...]}（带缓存）。
         
         使用 SQLAlchemy inspect 直接从数据库获取列名，
-        结果从 schema 缓存中复用（不额外存储，因为列名本身从已缓存的 schema 解析）。
+        结果缓存在 schema_cache 中，与表名/schema 共享同一 TTL。
         
         返回:
             字典 {表名: [列名列表]}
         """
+        # 尝试从缓存获取
+        if self.schema_cache:
+            cached = self.schema_cache.get_column_map()
+            if cached is not None:
+                logger.debug(f"[SchemaCache] Column map cache HIT ({len(cached)} tables)")
+                return cached
+
         try:
             from sqlalchemy import inspect as sa_inspect
             inspector = sa_inspect(self.db._engine)
@@ -494,6 +543,12 @@ class SQLDatabaseManager:
                     column_map[table_name] = cols
                 except Exception:
                     column_map[table_name] = []
+
+            # 写入缓存
+            if self.schema_cache:
+                self.schema_cache.set_column_map(column_map)
+                logger.debug(f"[SchemaCache] Column map cached ({len(column_map)} tables)")
+
             return column_map
         except Exception as e:
             logger.warning(f"[ColumnMap] Failed to get column map: {e}")
