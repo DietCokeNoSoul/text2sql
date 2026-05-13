@@ -3,24 +3,60 @@
 当 SQL_CONFIRM_ENABLED=true 时，每条 SQL 在执行前都会暂停并等待
 用户选择 [E]xecute（执行）或 [S]kip（跳过）。
 若用户跳过，LLM 会分析该 SQL 的风险并建议下一步操作。
+
+Web 模式扩展：
+  register_web_hook(session_id, hook) 注册一个同步回调，替代终端 input()。
+  set_web_session(session_id) 通过 ContextVar 传播当前会话 ID（自动随协程/线程继承）。
 """
 
+import contextvars
 import logging
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 # 跳过信号标记，用于在消息中传递跳过事件
 SKIP_SIGNAL_TAG = "[SKIP_SIGNAL]"
 
+# ── Web 模式钩子 ────────────────────────────────────────────────────────────
+
+# ContextVar：跨协程/线程自动继承当前 session_id（Python 3.7+ asyncio task + executor 均复制 context）
+_current_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "sql_confirm_session", default=""
+)
+
+# session_id → 同步回调 hook(sql) → (action, reason)
+_web_hooks: dict[str, Callable[[str], Tuple[str, str]]] = {}
+
+
+def set_web_session(session_id: str) -> None:
+    """设置当前上下文的会话 ID（供 SSE 端点在启动 graph 前调用）。"""
+    _current_session_id.set(session_id)
+
+
+def register_web_hook(session_id: str, hook: Callable[[str], Tuple[str, str]]) -> None:
+    """注册 Web 模式的 SQL 确认回调，替代终端 input()。"""
+    _web_hooks[session_id] = hook
+
+
+def unregister_web_hook(session_id: str) -> None:
+    """注销 Web 模式回调（请求结束后清理）。"""
+    _web_hooks.pop(session_id, None)
+
 
 def prompt_sql_confirmation(sql: str) -> Tuple[str, str]:
-    """在控制台展示 SQL 并等待用户确认。
+    """在控制台展示 SQL 并等待用户确认；Web 模式下调用已注册的 hook。
 
     返回:
         ("execute", "")   — 用户选择执行
         ("skip", reason)  — 用户选择跳过，reason 为可选的跳过原因
     """
+    # Web 模式：查找当前 session 的 hook
+    session_id = _current_session_id.get("")
+    if session_id and session_id in _web_hooks:
+        return _web_hooks[session_id](sql)
+
+    # 终端模式（原逻辑）
     print(f"\n{'═' * 60}")
     print("  ⚠️  SQL 待执行确认")
     print(f"{'─' * 60}")

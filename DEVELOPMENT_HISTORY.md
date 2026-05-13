@@ -45,6 +45,10 @@
 35. [阶段三十一：语义查询缓存移除](#35-阶段三十一语义查询缓存移除)
 36. [阶段三十二：异步流式输出修复](#36-阶段三十二异步流式输出修复)
 37. [阶段三十三：流式输出内容显示修复](#37-阶段三十三流式输出内容显示修复)
+38. [阶段三十四：高级对话记忆系统](#38-阶段三十四高级对话记忆系统)
+39. [阶段三十五：结构化 Prompt 骨架](#39-阶段三十五结构化-prompt-骨架)
+40. [阶段三十六：记忆系统 Bug 修复与策略增强](#40-阶段三十六记忆系统-bug-修复与策略增强)
+41. [阶段三十七：配置集中化与项目清理](#41-阶段三十七配置集中化与项目清理)
 
 ---
 
@@ -2651,4 +2655,233 @@ START → intent_router
 | `agent/skill_graph_builder.py` | `_general_chat_node` 改为 `async`；新增 `_format_answer_node`（async）；新增 `_FORMAT_ANSWER_SYSTEM_PROMPT`；图边：所有 skill → `format_answer` → END |
 | `agent/graph.py` | `_NODE_LABELS` 新增 `format_answer: "💡 生成回答"`；streaming 循环中 `on_chat_model_end` 增加无 token 流回退逻辑；snapshot 读取后增加 `final_message` 兜底提取 |
 
-*最后更新：2026-05-10（新增第34–37章：记忆修复 / 语义缓存移除 / 异步流式修复 / 流式输出显示修复）*
+---
+
+## 38. 阶段三十四：高级对话记忆系统
+
+### 背景
+
+原始记忆系统存在「历史死角」Bug：超出滑动窗口但尚不足以触发摘要的旧轮次被静默丢弃，导致部分对话历史在任何记忆层中都不存在。同时缺乏 token 溢出保护和语义去重能力。
+
+### 问题根因
+
+```
+complete_turns = [T0, T1, T2, T3, T4, T5]
+window_turns = 3  →  window = [T3, T4, T5]
+old_turns    = [T0, T1, T2]
+summary_every_n = 5  →  3 < 5，不触发摘要
+
+结果：T0~T2 既不在窗口，也不在卡片里 → 永久丢失
+```
+
+### 解决方案（五项优化）
+
+**① 方案 A：零头并入窗口**
+
+不足 `summary_every_n` 的余头轮次（remainder）直接前置合并进窗口，确保零丢失：
+
+```python
+remainder = old_turns[cursor:]
+if remainder:
+    window = remainder + window
+```
+
+**② Token 限流（溢出压缩）**
+
+窗口 token 估算超过 `max_window_tokens=6000` 时，收集需弹出的最旧轮次，**一次性批量**调用 LLM 摘要为 1 张卡片（而非逐条多次调用）：
+
+```python
+to_evict = []
+while len(window) > 1 and self._window_token_count(window) > self.max_window_tokens:
+    to_evict.append(window.pop(0))
+if to_evict:
+    summary = self._summarize_turns(to_evict)  # 1 次 LLM 调用
+    # 卡片 turn_start/end 使用 evicted.turn_index，而非 cursor
+```
+
+**③ 稀疏化保留（Anchor T1）**
+
+第一轮对话（T1）通常包含用户意图和业务背景，应始终保留在上下文中：
+
+```python
+@staticmethod
+def _anchor_first_turn(window, complete_turns):
+    anchor = complete_turns[0]
+    if anchor is window[0]:
+        return window
+    return [anchor] + window
+```
+
+**④ 语义去重（Semantic Dedup）**
+
+`format_history_messages` 输出阶段，两两比较窗口内各轮问题的 cosine 相似度，超过阈值（默认 0.85）时跳过较旧那轮的输出。**不修改 window 列表本身**，确保摘要游标不受影响：
+
+```python
+skip_indices = self._dedup_window_indices(context.window_turns)
+for idx, turn in enumerate(context.window_turns):
+    if idx in skip_indices:
+        continue
+    result.append(HumanMessage(turn.human))
+```
+
+**⑤ 即时报告摘要**
+
+数据分析报告超过配置阈值（默认 800字）时，立即调用 LLM 生成结构化摘要写入消息历史，完整报告保留在 `state["report"]` 供 UI 展示：
+
+```
+messages[-1].content = "[报告摘要]\n目标/关键指标/核心结论/最优项/异常项"
+state["report"]      = 完整 2500 字报告（UI 读此字段）
+```
+
+### 处理流水线（新顺序）
+
+```
+1. MessageFilter.filter()          过滤工具调用噪声
+2. group_into_turns()              分组为 ConversationTurn 列表
+3. 批量摘要（≥ summary_every_n）   旧轮次 → 卡片 → SQLite
+4. 方案A 零头并入窗口              确保无遗漏
+5. Token 溢出弹出（批量）          超限时批量摘要最旧连续轮次
+6. Anchor T1                       T1 固定在窗口最前端
+7. 卡片语义检索                    embed(当前问题) → cosine → top-k 卡片
+→ 返回 ConversationContext
+8. format_history_messages()       语义去重跳过输出
+```
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `agent/memory.py` | `window_turns` 默认值 3→5；新增 `max_window_tokens=6000`、`dedup_threshold=0.85` 参数；新增 `_estimate_tokens`、`_window_token_count`、`_anchor_first_turn`、`_dedup_window_indices` 方法；`get_context` 增加方案A / token 溢出 / anchor 逻辑；`format_history_messages` 增加去重跳过逻辑 |
+| `skills/data_analysis/skill.py` | `_generate_report` 末尾增加即时报告压缩逻辑；`__init__` 存储 `_report_summary_threshold` |
+
+---
+
+## 39. 阶段三十五：结构化 Prompt 骨架
+
+### 背景
+
+各节点的 Prompt 格式不统一，信息密度参差不齐，不利于维护和扩展。
+
+### 方案
+
+统一采用六标签结构化骨架，所有节点 Prompt 必须包含以下六个标签（可留空，但骨架必须保留）：
+
+```
+[Role & Policies]  Agent 角色定位和行为准则
+[Task]             当前需要完成的具体任务
+[Environment]      数据库结构、可用工具等环境信息（原 [State]）
+[Evidence]         从外部知识库检索的证据信息
+[Context]          历史对话和相关记忆
+[Output]           期望的输出格式和要求
+```
+
+> **注**：用户建议以 `[Environment]` 替代原方案中的 `[State]`，更准确反映该标签的语义（描述外部环境，而非 Agent 内部状态）。
+
+### 覆盖范围
+
+| 文件 | Prompt 数量 |
+|------|------------|
+| `agent/skill_graph_builder.py` | 3（意图路由、通用对话、答案格式化） |
+| `agent/memory.py` | 1（摘要生成） |
+| `agent/sql_correction.py` | 1（SQL 纠错） |
+| `skills/simple_query/skill.py` | 3 |
+| `skills/complex_query/skill.py` | 3 |
+| `skills/data_analysis/skill.py` | 7 |
+| **合计** | **18 个** |
+
+### 文件变更
+
+所有上述文件中的 Prompt 字符串均重写为六标签格式。
+
+---
+
+## 40. 阶段三十六：记忆系统 Bug 修复与策略增强
+
+### Bug：token 溢出卡片轮次索引错误
+
+**原代码：**
+```python
+card = MemoryCard(turn_start=cursor, turn_end=cursor)
+cursor += 1
+```
+
+`cursor` 记录的是批量摘要游标，与实际弹出轮次的 `turn_index` 不一致，导致卡片的 `turn_start/turn_end` 标注错误（虽不影响检索，但日志误导性强）。
+
+**修复：**
+```python
+card = MemoryCard(
+    turn_start=evicted.turn_index,
+    turn_end=evicted.turn_index,
+)
+cursor = evicted.turn_index + 1
+```
+
+### 策略优化：溢出弹出由逐条改为批量
+
+**旧策略（逐条）：**
+```
+while 超限:
+    弹出 1 条 → LLM 调用 → 1 张卡片   ← N 次调用
+```
+
+**新策略（批量）：**
+```
+先收集所有需弹出的轮次 → 1 次 LLM 调用 → 1 张卡片
+```
+
+优势：
+- LLM 调用从 N 次降为 1 次
+- 能正确处理大 token 轮次在中间的情况（旧策略弹出 T0/T1 后 T2 的大报告仍在窗口）
+- 卡片轮次范围连续，语义完整性更好
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `agent/memory.py` | token 溢出逻辑重写：`while` 循环改为先收集 `to_evict` 列表再批量摘要；卡片 `turn_start/end` 使用 `evicted.turn_index` |
+
+---
+
+## 41. 阶段三十七：配置集中化与项目清理
+
+### 背景
+
+记忆系统新增了多个调参参数，但分散在代码里作为硬编码值，开发人员无法在不修改代码的情况下调整。同时项目中存在大量空白遗留文件。
+
+### 配置外化
+
+将记忆系统所有可调参数纳入 `MemoryConfig` 并通过 `.env` 读取：
+
+| 环境变量 | 默认值 | 含义 |
+|----------|--------|------|
+| `MEMORY_WINDOW_TURNS` | 5 | 滑动窗口保留最近几轮完整对话 |
+| `MEMORY_SUMMARY_EVERY_N` | 5 | 每积累多少旧轮次触发一次批量摘要 |
+| `MEMORY_TOP_K_CARDS` | 3 | 每次检索最相关的几张历史卡片 |
+| `MEMORY_MAX_WINDOW_TOKENS` | 6000 | 窗口 token 上限（超出触发溢出压缩） |
+| `MEMORY_DEDUP_THRESHOLD` | 0.85 | 语义去重相似度阈值（0~1） |
+| `MEMORY_REPORT_SUMMARY_THRESHOLD` | 800 | 分析报告超过此字符数时即时压缩 |
+
+### 配置文件整合
+
+- 删除 `.env.example`（模板文件），将所有配置参数（含注释说明）直接写入 `.env`
+- `.env` 成为唯一配置文件，按功能分区组织（LLM / 数据库 / 缓存 / 检索 / 安全护栏 / **记忆系统** / 输出 / 日志）
+
+### 空白文件清理
+
+删除项目中 35 个大小为 0 的遗留文件，包括：
+- 旧架构空文件：`agent/graph_builder.py`、`agent/nodes.py`、`agent/query_cache.py`
+- 历史文档：`MIGRATION_GUIDE.md`、`TEST_REPORT.md` 等 11 个
+- 遗留测试脚本：`test_*.py`、`verify_*.py` 等 16 个
+- 示例和诊断工具：3 + 2 个
+
+### 文件变更
+
+| 文件 | 变更 |
+|------|------|
+| `agent/config.py` | `MemoryConfig` 新增 `max_window_tokens`、`dedup_threshold`、`report_summary_threshold`；`from_env()` 读取对应环境变量；`window_turns` 默认值同步为 5 |
+| `agent/skill_graph_builder.py` | `ConversationMemoryManager` 实例化时传入 `max_window_tokens`、`dedup_threshold` |
+| `skills/data_analysis/skill.py` | `__init__` 从 config 读取并存储 `_report_summary_threshold`；`_generate_report` 使用此实例变量替代硬编码值 |
+| `.env` | 整合全部配置，新增完整记忆系统配置区块 |
+| `.env.example` | 已删除 |
+
+*最后更新：2026-05-13（新增第38–41章：高级记忆系统 / Prompt 骨架 / 记忆 Bug 修复与策略增强 / 配置集中化与清理）*

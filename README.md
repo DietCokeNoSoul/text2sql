@@ -268,3 +268,14 @@ SECURITY_AUDIT_LOG_FILE=logs/sql_audit.jsonl
 | `SECURITY_TABLE_ALLOWLIST` | — | 允许访问的表（留空=允许全部） |
 | `SECURITY_AUDIT_LOG` | `true` | 是否启用审计日志 |
 | `SECURITY_AUDIT_LOG_FILE` | — | 审计日志文件路径（JSONL 格式） |
+
+# 终端模式（不变）
+uv run python main.py
+
+# Web 模式（开发，支持热更新）
+uv run python web/start.py        # 后端 http://localhost:8000
+cd web/frontend && npm run dev    # 前端 http://localhost:5173
+
+# Web 模式（生产）
+cd web/frontend && npm run build
+uv run python web/start.py        # http://localhost:8000

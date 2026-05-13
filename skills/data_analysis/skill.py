@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END, START, add_messages
 
 from agent.config import AgentConfig, OutputConfig
@@ -88,6 +89,9 @@ class DataAnalysisSkill(BaseSkill):
     ):
         self.db_manager = db_manager
         self._output_config: OutputConfig = config.output if config else OutputConfig()
+        self._report_summary_threshold: int = (
+            config.memory.report_summary_threshold if config else 800
+        )
         self._plan_manager = plan_manager
         self.confirm_enabled = confirm_enabled
         
@@ -148,7 +152,7 @@ class DataAnalysisSkill(BaseSkill):
     
     # ============ Node 1: Understand Goal ============
     
-    def _understand_goal(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _understand_goal(self, state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
         """
         Understand the user's analysis objective and requirements.
         
@@ -170,26 +174,35 @@ class DataAnalysisSkill(BaseSkill):
         if not user_question and messages:
             user_question = messages[0].content
         
-        system_prompt = """You are a data analyst. Analyze the user's request and extract:
+        thread_id = (config or {}).get("configurable", {}).get("thread_id", "")
+        
+        system_prompt = """[Role & Policies]
+你是一个数据分析专家，负责理解用户的分析目标并提取结构化需求。
+只输出 JSON，不输出 Markdown、解释或前缀内容。
 
-1. Primary objective - What is the main question?
-2. Key metrics - What should be measured?
-3. Dimensions - What should be grouped/compared?
-4. Filters - Any time ranges, conditions, or limits?
-5. Output expectations - What format should results be in?
+[Task]
+分析用户的分析请求，提取结构化的分析目标信息。
 
-**CRITICAL**: Output ONLY valid JSON, no markdown, no explanation.
+[Environment]
+（无）
 
-Output format:
+[Evidence]
+（无）
+
+[Context]
+（无）
+
+[Output]
+输出格式（纯 JSON，不含 Markdown）：
 {
-    "objective": "...",
-    "metrics": ["...", "..."],
-    "dimensions": ["...", "..."],
+    "objective": "主要分析目标",
+    "metrics": ["指标1", "指标2"],
+    "dimensions": ["维度1", "维度2"],
     "filters": {},
-    "output_format": "..."
+    "output_format": "期望输出格式"
 }
 
-Return ONLY the JSON object, nothing else.
+只返回 JSON 对象，不要任何其他内容。
 """
         
         analysis_messages = [
@@ -214,6 +227,7 @@ Return ONLY the JSON object, nothing else.
                     title=user_question[:80],
                     description=user_question,
                     skill="data_analysis",
+                    thread_id=thread_id,
                     steps=[
                         {"step_id": 1, "description": "understand_goal: 理解分析目标", "depends_on": []},
                         {"step_id": 2, "description": "explore_data: 探索数据库结构", "depends_on": [1]},
@@ -319,23 +333,28 @@ Return ONLY the JSON object, nothing else.
         # Provide a truncated schema summary for planning context
         data_summary = combined_schema[:3000] + "..." if len(combined_schema) > 3000 else combined_schema
         
-        system_prompt = f"""You are a data analyst creating an analysis plan.
+        system_prompt = f"""[Role & Policies]
+你是一个数据分析规划专家，基于目标和数据结构制定详细的分析计划。
+只输出 JSON，不添加任何解释或 Markdown 包装。
 
-Analysis Goal:
+[Task]
+根据分析目标和可用数据，生成分步骤的分析计划。
+
+[Environment]
+（无）
+
+[Evidence]
+分析目标：
 {analysis_goal}
 
-Available Data:
+可用数据概要：
 {data_summary}
 
-Create a detailed analysis plan with:
-1. Analysis steps (sequential)
-2. Required calculations/aggregations
-3. Expected insights
-4. Potential visualizations
+[Context]
+（无）
 
-**CRITICAL**: Output ONLY valid JSON, no markdown, no explanation.
-
-Output format:
+[Output]
+输出格式（纯 JSON）：
 {{
     "steps": [
         {{"id": 1, "description": "...", "tables": ["..."], "calculations": ["..."]}},
@@ -345,7 +364,7 @@ Output format:
     "visualization_suggestions": ["...", "..."]
 }}
 
-Return ONLY the JSON object, nothing else.
+只返回 JSON 对象，不要任何其他内容。
 """
         
         plan_messages = [
@@ -407,15 +426,27 @@ Return ONLY the JSON object, nothing else.
             description = step.get("description", "")
             calculations = step.get("calculations", [])
             
-            system_prompt = f"""Generate a MySQL-compatible SQL query for this analysis step.
+            system_prompt = f"""[Role & Policies]
+你是一个 MySQL SQL 生成专家，为数据分析步骤生成可执行的 SQL 查询。
+只输出纯 SQL，不加任何解释或 Markdown 包装。
 
-Step: {description}
-Required Calculations: {', '.join(calculations) if calculations else 'as needed'}
+[Task]
+为以下分析步骤生成 MySQL 兼容的 SQL 查询。
+步骤：{description}
+所需计算：{', '.join(calculations) if calculations else '按需'}
 
-Available Tables and Schemas:
+[Environment]
+- 数据库方言：MySQL
+
+[Evidence]
+可用表和 Schema：
 {all_schemas}
 
-**CRITICAL**: Output ONLY the SQL query. No markdown, no explanation, no code blocks.
+[Context]
+（无）
+
+[Output]
+只输出 SQL 查询语句，不加 Markdown、不加解释。
 """
             
             query_messages = [
@@ -461,17 +492,27 @@ Available Tables and Schemas:
         
         all_schemas = combined_schema
         
-        system_prompt = f"""You are a data analyst. Generate SQL queries to answer the analysis goal.
+        system_prompt = f"""[Role & Policies]
+你是一个数据分析 SQL 生成专家。只输出 JSON，不输出 Markdown 或解释。
 
-Analysis Goal:
+[Task]
+根据分析目标，直接生成覆盖所有分析需求的 SQL 查询列表。
+
+[Environment]
+- 数据库方言：MySQL
+
+[Evidence]
+分析目标：
 {analysis_goal}
 
-Available Tables and Schemas:
+可用表和 Schema：
 {all_schemas}
 
-**CRITICAL**: Output ONLY valid JSON, no markdown.
+[Context]
+（无）
 
-Output format:
+[Output]
+输出格式（纯 JSON 数组）：
 [
     {{"step_id": 1, "description": "...", "query": "SELECT ..."}},
     {{"step_id": 2, "description": "...", "query": "SELECT ..."}}
@@ -564,15 +605,26 @@ Output format:
                 })
 
                 # Generate insight from result
-                insight_prompt = f"""Analyze this query result and extract key insights.
+                insight_prompt = f"""[Role & Policies]
+你是一个数据洞察提取专家，基于 SQL 查询结果提炼关键业务发现。
 
-Query Purpose: {description}
-Result: {result[:500]}
+[Task]
+从以下查询结果中提取关键洞察，用简洁中文描述（2-4句话）。
 
-What are the key findings?
+[Environment]
+查询目的：{description}
+
+[Evidence]
+查询结果：{result[:500]}
+
+[Context]
+（无）
+
+[Output]
+用简洁中文描述关键发现，2-4句话，直接输出文字，不加前缀。
 """
                 insight_messages = [
-                    SystemMessage(content="You are a data analyst extracting insights."),
+                    SystemMessage(content="你是一个数据洞察提取专家。"),
                     HumanMessage(content=insight_prompt),
                 ]
                 insight_response = self.llm.invoke(insight_messages)
@@ -639,28 +691,34 @@ What are the key findings?
             data = result.get("result", "")
 
             # ── Ask LLM for chart recommendation ──────────────────────────
-            viz_prompt = f"""Recommend a visualization for this data.
+            viz_prompt = f"""[Role & Policies]
+你是一个数据可视化专家，为查询结果推荐最合适的图表类型。只输出 JSON，不添加解释。
 
-Data Description: {description}
-Sample Data: {str(data)[:300]}
+[Task]
+为以下查询结果推荐可视化方案。
 
-Suggest:
-1. Best chart type (ONLY one of: bar, pie, line)
-2. X-axis description
-3. Y-axis description
-4. Chart title (short, in Chinese)
+[Environment]
+- 支持的图表类型：bar（柱状图）、pie（饼图）、line（折线图）
 
-Output as JSON ONLY:
+[Evidence]
+数据描述：{description}
+样本数据：{str(data)[:300]}
+
+[Context]
+（无）
+
+[Output]
+输出格式（纯 JSON）：
 {{
     "chart_type": "bar",
-    "x_axis": "...",
-    "y_axis": "...",
-    "title": "...",
-    "message": "..."
+    "x_axis": "X轴描述",
+    "y_axis": "Y轴描述",
+    "title": "中文图表标题",
+    "message": "可视化说明"
 }}"""
 
             viz_messages = [
-                SystemMessage(content="You are a data visualization expert. Output JSON only."),
+                SystemMessage(content="你是一个数据可视化专家，只输出 JSON。"),
                 HumanMessage(content=viz_prompt)
             ]
 
@@ -740,27 +798,40 @@ Output as JSON ONLY:
             for v in visualizations
         ])
         
-        system_prompt = f"""根据以下分析结果，生成一份完整的中文数据分析报告（Markdown格式）。
+        system_prompt = f"""[Role & Policies]
+你是一个数据分析报告撰写专家，生成结构清晰、有数据支撑的中文分析报告。
+直接输出 Markdown，不包裹在代码块中，不添加解释前缀。
 
-分析目标:
+[Task]
+根据提供的分析结果、洞察和可视化建议，生成完整的数据分析报告。
+
+[Environment]
+（无）
+
+[Evidence]
+分析目标：
 {analysis_goal}
 
-查询结果:
+查询结果：
 {results_text}
 
-关键洞察:
+关键洞察：
 {insights_text}
 
-可视化建议:
+可视化建议：
 {viz_text}
 
-请生成一份结构化的 Markdown 报告，包括：
+[Context]
+（无）
+
+[Output]
+生成结构化 Markdown 报告，包含：
 1. 报告标题和摘要
 2. 关键发现（用数据支撑）
 3. 可视化建议
 4. 结论和建议
 
-直接输出 Markdown 格式的报告，不要包裹在代码块中。
+直接输出 Markdown，不要包裹在代码块中。
 """
         
         report_messages = [
@@ -795,13 +866,56 @@ Output as JSON ONLY:
         if report_path:
             report_content += f"\n\n---\n\n> 报告已保存至: `{report_path}`\n"
             logger.info(f"[DataAnalysis] Report saved: {report_path}")
-        
-        new_message = AIMessage(content=report_content)
+
+        # ── 即时摘要：报告超过阈值时生成结构化摘要写入消息历史 ────────────────
+        # UI 展示完整报告，消息历史存储压缩摘要，避免长报告占满上下文窗口
+        if len(report_content) > self._report_summary_threshold:
+            try:
+                compress_prompt = f"""[Role & Policies]
+你是报告摘要专家，用结构化格式压缩分析报告，保留所有关键数字和结论。
+
+[Task]
+将以下分析报告压缩为 200 字以内的结构化摘要。
+
+[Environment]
+（无）
+
+[Evidence]
+{report_content[:3000]}
+
+[Context]
+（无）
+
+[Output]
+严格使用以下格式输出，不加其他内容：
+- 目标：（一句话描述分析目的）
+- 关键指标：（数值型结果，如 总记录数: 7, 最高销量: 2340）
+- 核心结论：（1-2句话）
+- 最优项：（表现最好的维度/值）
+- 异常项：（如有异常则填写，否则写"无"）
+"""
+                compress_messages = [
+                    SystemMessage(content=compress_prompt),
+                    HumanMessage(content="请压缩报告。"),
+                ]
+                compressed = self.llm.invoke(compress_messages).content.strip()
+                history_content = f"[报告摘要]\n{compressed}"
+                logger.info(
+                    f"[DataAnalysis] Report compressed: {len(report_content)} → {len(history_content)} chars"
+                )
+            except Exception as e:
+                logger.warning(f"[DataAnalysis] Report compression failed: {e}, using truncation")
+                history_content = report_content[:self._report_summary_threshold] + "…[已截断，完整报告已保存]"
+        else:
+            history_content = report_content
+
+        # 消息历史写入摘要版，UI 展示完整版（通过 state["report"] 传递）
+        new_message = AIMessage(content=history_content)
         self._step_done(state, 7, f"Report generated ({len(report_content)} chars)")
         
         return {
             "messages": [new_message],
-            "report": report_content
+            "report": report_content  # UI 读取此字段展示完整报告
         }
     
     def _export_results_node(self, state: Dict[str, Any]) -> Dict[str, Any]:

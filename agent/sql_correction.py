@@ -67,18 +67,28 @@ def _build_column_hint(error_info: SQLErrorInfo, db_manager: Any) -> str:
 
 # ── LLM prompts ──────────────────────────────────────────────────────────────
 
-_FIX_SYSTEM_PROMPT = """
-您是一位 SQL 错误修复专家。
+_FIX_SYSTEM_PROMPT = """[Role & Policies]
+您是一位 SQL 错误修复专家。只修复错误，不改变业务逻辑，不添加解释文字。
 
-**任务**: 根据提供的错误信息，直接输出修复后的 SQL 语句（纯文本，不要 Markdown 代码块）。
+[Task]
+根据提供的错误信息，输出修复后的 SQL 语句（纯文本，不要 Markdown 代码块）。
 
+[Environment]
+（错误信息、列名提示等由调用方在 HumanMessage 中提供）
+
+[Evidence]
+（错误列名建议和类型提示由调用方在 HumanMessage 中提供）
+
+[Context]
+（无）
+
+[Output]
 修复规则：
 1. 列名错误 → 用建议列名替换，保留所有其他子句
 2. 语法错误 → 修正语法，不改变业务逻辑
 3. 类型错误 → 加入合适的 CAST/日期格式转换/NULLIF 防零除
 4. GROUP BY 错误 → 把 SELECT 里的非聚合列加入 GROUP BY
-5. 只返回修复后的 SQL，不要任何解释文字
-""".strip()
+5. 只返回修复后的 SQL，不要任何解释文字""".strip()
 
 _TYPE_HINT_EXTRA = """
 **类型修复提示**:

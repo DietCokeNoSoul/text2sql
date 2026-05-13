@@ -5,6 +5,14 @@ Integrates three Skills (Simple Query, Complex Query, Data Analysis)
 with two-level intelligent routing:
   L1 intent_router  — general_chat vs db_query  (lightweight, no DB context)
   L2 skill_router   — simple_query / complex_query / data_analysis (DB path only)
+
+Memory System:
+  ConversationMemoryManager is initialized here and injected into all LLM call
+  sites. It provides:
+    - MessageFilter: strips intermediate tool-call messages from history
+    - Sliding window (last WINDOW_TURNS complete turns) passed in full
+    - Summary memory cards: older turns are summarized by LLM → stored in SQLite
+    - Vector retrieval: relevant cards retrieved for each new question
 """
 
 import logging
@@ -12,6 +20,7 @@ from typing import Any, Dict, Callable
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, START, END, add_messages
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -25,26 +34,67 @@ from agent.skills.registry import SkillRegistry
 logger = logging.getLogger(__name__)
 
 # L1 classifier prompt — includes conversation context for follow-up awareness
-_INTENT_SYSTEM_PROMPT = """你是一个意图分类器，判断用户的问题是否需要查询数据库。
+_INTENT_SYSTEM_PROMPT = """[Role & Policies]
+你是一个意图分类器，专门判断用户问题是否需要查询数据库。
+规则：只输出 db_query 或 general_chat，不输出任何其他内容。
 
-回答规则：
-- 如果问题涉及查数据、统计、分析数据库中的信息 → 输出 db_query
-- 如果问题是对历史查询结果的追问（如"那第一名是谁"、"它的利润率呢"）→ 输出 db_query
-- 如果问题是闲聊、打招呼、问天气、问你是谁、或任何与数据库无关的问题 → 输出 general_chat
-- 只输出 db_query 或 general_chat，不输出任何其他内容
+[Task]
+判断当前用户消息的意图类别：
+- db_query：涉及查询数据、统计分析、或对历史查询结果的追问（如"那第一名是谁"、"它的利润率呢"）
+- general_chat：闲聊、打招呼、问天气、问你是谁等与数据库无关的问题
 
-注意：结合对话历史判断。如果历史中已有数据库查询的上下文，追问类问题应归为 db_query。"""
+[Environment]
+（无）
+
+[Evidence]
+（无）
+
+[Context]
+结合对话历史进行判断。如果历史中已有数据库查询的上下文，追问类问题应归为 db_query。
+
+[Output]
+只输出 db_query 或 general_chat，不附加任何解释。"""
 
 # general_chat node system prompt
-_GENERAL_CHAT_SYSTEM_PROMPT = """你是一个 Text-to-SQL 智能助手，专门帮助用户查询和分析数据库。
+_GENERAL_CHAT_SYSTEM_PROMPT = """[Role & Policies]
+你是一个 Text-to-SQL 智能助手，专门帮助用户查询和分析数据库。
+对非数据库问题友好直接回答；不猜测、不编造数据。
 
-用户当前的问题不需要查询数据库，请友好地直接回答。
-如果用户想查询数据，可以告诉他们用自然语言描述需求，你会帮他们转换成 SQL 查询。"""
+[Task]
+用户当前的问题不需要查询数据库，直接回答即可。
+如果用户想查询数据，告知可用自然语言描述需求，你会帮他们转换成 SQL 查询。
+
+[Environment]
+（无）
+
+[Evidence]
+（无）
+
+[Context]
+（由记忆系统注入）
+
+[Output]
+使用中文回答，语气友好简洁。"""
 
 # format_answer node system prompt — wraps raw SQL results into natural language
-_FORMAT_ANSWER_SYSTEM_PROMPT = """你是一个 Text-to-SQL 智能助手。
-根据用户的问题和 SQL 查询结果，用自然语言给出简洁、友好的回答。
-- 直接回答用户的问题，不要重复 SQL 语句
+_FORMAT_ANSWER_SYSTEM_PROMPT = """[Role & Policies]
+你是一个 Text-to-SQL 智能助手，负责将原始 SQL 查询结果转换为自然语言回答。
+不重复 SQL 语句，不编造数据，只基于提供的查询结果作答。
+
+[Task]
+根据用户问题和 SQL 查询结果，生成简洁友好的中文回答。
+
+[Environment]
+（无）
+
+[Evidence]
+（用户问题和 SQL 查询结果由调用方注入到 HumanMessage 中）
+
+[Context]
+（无）
+
+[Output]
+- 直接回答用户问题，不重复 SQL 语句
 - 如果结果是数字，说明含义（如"共有 1006 个用户"）
 - 如果结果是列表，摘要展示（不超过 10 条详细列出，更多则说明总数）
 - 使用中文回答"""
@@ -111,6 +161,27 @@ class SkillBasedGraphBuilder:
         except Exception as e:
             logger.warning(f"[SkillBuilder] SessionPlanManager init failed: {e}")
             self._plan_manager = None
+
+        # Initialize ConversationMemoryManager
+        self._memory: Any = None
+        if config.memory.enabled:
+            try:
+                import os
+                from agent.memory import ConversationMemoryManager
+                self._memory = ConversationMemoryManager(
+                    llm=llm,
+                    db_path=config.memory.db_path,
+                    window_turns=config.memory.window_turns,
+                    summary_every_n=config.memory.summary_every_n,
+                    top_k_cards=config.memory.top_k_cards,
+                    embedding_model=config.memory.embedding_model,
+                    max_window_tokens=config.memory.max_window_tokens,
+                    dedup_threshold=config.memory.dedup_threshold,
+                )
+                logger.info("[SkillBuilder] ConversationMemoryManager ready")
+            except Exception as e:
+                logger.warning(f"[SkillBuilder] MemoryManager init failed (will use raw history): {e}")
+                self._memory = None
         
         # Initialize Skills
         logger.info("Initializing Skills...")
@@ -197,38 +268,71 @@ class SkillBasedGraphBuilder:
 
     # ── L1: Intent routing ────────────────────────────────────────────────────
 
-    def _intent_router_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    @staticmethod
+    def _extract_thread_id(config: Any) -> str:
+        """从 LangGraph RunnableConfig 中安全提取 thread_id。"""
+        if config is None:
+            return ""
+        if hasattr(config, "get"):
+            return config.get("configurable", {}).get("thread_id", "")
+        return ""
+
+    def _intent_router_node(self, state: Dict[str, Any], config: RunnableConfig | None = None) -> Dict[str, Any]:
         """L1 router: decide general_chat vs db_query.
 
-        Passes recent conversation history (last 6 messages) so the LLM can
-        correctly handle follow-up questions that reference previous DB results.
+        Uses ConversationMemoryManager (if enabled) to:
+          - Filter intermediate tool messages from history
+          - Inject relevant memory cards from older turns
+          - Pass only clean sliding window history to classifier
+        Falls back to raw last-6-messages logic when memory is disabled.
         """
         logger.info("[L1 Router] Classifying intent")
 
         messages = state.get("messages", [])
-        # Take last 6 messages as context window (3 turns), trim to save tokens
-        recent = messages[-6:] if len(messages) > 6 else messages
-
-        # Build history as plain text for the classifier
-        history_lines = []
-        for msg in recent:
-            if not hasattr(msg, "type"):
-                continue
-            if msg.type == "human":
-                history_lines.append(f"用户: {msg.content}")
-            elif msg.type == "ai":
-                # Truncate long AI replies to save tokens
-                content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
-                history_lines.append(f"助手: {content}")
+        current_question = self._latest_human_message(state)
+        thread_id = self._extract_thread_id(config)
 
         classification_messages = [SystemMessage(content=_INTENT_SYSTEM_PROMPT)]
-        if history_lines:
-            history_text = "\n".join(history_lines[:-1])  # all but the last user message
-            if history_text:
+
+        if self._memory is not None and thread_id:
+            # Use memory manager: get filtered + summarized context
+            ctx = self._memory.get_context(thread_id, messages)
+            history_msgs = self._memory.format_history_messages(ctx)
+            # Build plain-text history for classifier (exclude current question)
+            history_lines = []
+            for msg in history_msgs:
+                if isinstance(msg, HumanMessage):
+                    history_lines.append(f"用户: {msg.content[:200]}")
+                elif isinstance(msg, AIMessage):
+                    content = msg.content[:200] + ("..." if len(msg.content) > 200 else "")
+                    history_lines.append(f"助手: {content}")
+                elif isinstance(msg, SystemMessage) and "记忆卡片" in msg.content:
+                    prefix = "## 相关历史记忆（来自更早的对话摘要）\n\n"
+                    history_lines.append(f"[历史摘要] {msg.content[len(prefix):][:300]}")
+            if history_lines:
                 classification_messages.append(
-                    SystemMessage(content=f"【对话历史】\n{history_text}")
+                    SystemMessage(content=f"【对话历史】\n" + "\n".join(history_lines))
                 )
-        classification_messages.append(HumanMessage(content=self._latest_human_message(state)))
+        else:
+            # Fallback: raw last-6-messages (original behavior)
+            recent = messages[-6:] if len(messages) > 6 else messages
+            history_lines = []
+            for msg in recent:
+                if not hasattr(msg, "type"):
+                    continue
+                if msg.type == "human":
+                    history_lines.append(f"用户: {msg.content}")
+                elif msg.type == "ai":
+                    content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+                    history_lines.append(f"助手: {content}")
+            if history_lines:
+                history_text = "\n".join(history_lines[:-1])
+                if history_text:
+                    classification_messages.append(
+                        SystemMessage(content=f"【对话历史】\n{history_text}")
+                    )
+
+        classification_messages.append(HumanMessage(content=current_question))
 
         response = self.llm.invoke(classification_messages)
         intent = response.content.strip().lower()
@@ -243,12 +347,26 @@ class SkillBasedGraphBuilder:
     def _route_intent(self, state: Dict[str, Any]) -> str:
         return state.get("query_intent", "db_query")
 
-    async def _general_chat_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Direct LLM reply for non-database questions, with full conversation history."""
+    async def _general_chat_node(self, state: Dict[str, Any], config: RunnableConfig | None = None) -> Dict[str, Any]:
+        """Direct LLM reply for non-database questions.
+
+        Uses memory context (filtered window + memory cards) when available.
+        Falls back to passing full raw history when memory is disabled.
+        """
         logger.info("[General Chat] Responding without DB")
-        history = state.get("messages", [])
-        messages = [SystemMessage(content=_GENERAL_CHAT_SYSTEM_PROMPT)] + history
-        response = await self.llm.ainvoke(messages)
+        messages = state.get("messages", [])
+        thread_id = self._extract_thread_id(config)
+
+        chat_messages = [SystemMessage(content=_GENERAL_CHAT_SYSTEM_PROMPT)]
+
+        if self._memory is not None and thread_id:
+            ctx = self._memory.get_context(thread_id, messages)
+            chat_messages += self._memory.format_history_messages(ctx)
+            chat_messages.append(HumanMessage(content=self._latest_human_message(state)))
+        else:
+            chat_messages += messages
+
+        response = await self.llm.ainvoke(chat_messages)
         return {"messages": [response]}
 
     async def _format_answer_node(self, state: Dict[str, Any]) -> Dict[str, Any]:

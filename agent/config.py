@@ -189,6 +189,44 @@ class SchemaCacheConfig:
 
 
 @dataclass
+class MemoryConfig:
+    """对话记忆增强配置。
+
+    策略:
+      - 过滤掉中间工具调用消息，只保留 Human + 最终AI回答
+      - 超出滑动窗口的旧轮次每 summary_every_n 轮触发一次 LLM 摘要
+      - 摘要存为记忆卡片（SQLite 本地向量存储），绝不二次摘要
+      - 每次新提问时向量检索最相关的 top_k_cards 张卡片注入上下文
+      - 窗口 token 超过 max_window_tokens 时批量弹出最旧轮次并压缩为卡片
+      - 语义相似度超过 dedup_threshold 的旧轮次在输出时跳过（去重）
+      - 数据分析报告超过 report_summary_threshold 字符时即时压缩写入消息历史
+    """
+    enabled: bool = True
+    window_turns: int = 5                    # 滑动窗口保留的完整轮次数
+    summary_every_n: int = 5                 # 旧轮次累积多少后触发摘要
+    top_k_cards: int = 3                     # 每次检索注入的记忆卡片数量
+    db_path: str = "memory_cards.db"         # 记忆卡片 SQLite 数据库路径
+    embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    max_window_tokens: int = 6000            # 窗口 token 上限，超出触发溢出压缩
+    dedup_threshold: float = 0.85            # 去重相似度阈值（cosine）
+    report_summary_threshold: int = 800      # 分析报告超过此字符数时即时压缩
+
+    @classmethod
+    def from_env(cls) -> "MemoryConfig":
+        return cls(
+            enabled=os.getenv("MEMORY_ENABLED", "true").lower() == "true",
+            window_turns=int(os.getenv("MEMORY_WINDOW_TURNS", "5")),
+            summary_every_n=int(os.getenv("MEMORY_SUMMARY_EVERY_N", "5")),
+            top_k_cards=int(os.getenv("MEMORY_TOP_K_CARDS", "3")),
+            db_path=os.getenv("MEMORY_DB_PATH", "memory_cards.db"),
+            embedding_model=os.getenv("MEMORY_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"),
+            max_window_tokens=int(os.getenv("MEMORY_MAX_WINDOW_TOKENS", "6000")),
+            dedup_threshold=float(os.getenv("MEMORY_DEDUP_THRESHOLD", "0.85")),
+            report_summary_threshold=int(os.getenv("MEMORY_REPORT_SUMMARY_THRESHOLD", "800")),
+        )
+
+
+@dataclass
 class CacheConfig:
     """LLM 响应缓存配置。
 
@@ -220,6 +258,7 @@ class AgentConfig:
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
     schema_cache: SchemaCacheConfig = field(default_factory=SchemaCacheConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
     sql_confirm_enabled: bool = False  # SQL 执行前等待用户确认
     
     @classmethod
@@ -284,6 +323,7 @@ class AgentConfig:
             retrieval=RetrievalConfig.from_env(),
             cache=CacheConfig.from_env(),
             schema_cache=SchemaCacheConfig.from_env(),
+            memory=MemoryConfig.from_env(),
             sql_confirm_enabled=os.getenv("SQL_CONFIRM_ENABLED", "false").lower() == "true",
         )
     

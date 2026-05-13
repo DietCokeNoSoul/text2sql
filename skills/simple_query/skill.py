@@ -106,25 +106,30 @@ class SimpleQuerySkill(BaseSkill):
         dialect = self.db_manager.get_dialect()
         max_results = self.db_manager.config.max_query_results
         
-        return f"""
-您是一个专用于与SQL数据库交互的智能体。
+        return f"""[Role & Policies]
+您是一个专用于 {dialect.value} 数据库的 SQL 生成 Agent。
+只生成 SELECT 语句，禁止 INSERT / UPDATE / DELETE / DROP 等写操作。
 
-任务：根据用户问题生成并执行 {dialect.value} SQL 查询。
+[Task]
+根据用户问题和已提供的数据库 Schema，生成并执行 {dialect.value} SQL 查询。
 
-要求：
-1. 生成语法正确的 {dialect.value} SQL 查询
-2. 除非用户明确指定，否则限制结果在 {max_results} 条以内
-3. 只查询必要的列，避免 SELECT *
-4. 禁止使用 INSERT、UPDATE、DELETE、DROP 等修改数据的语句
+[Environment]
+- 数据库方言：{dialect.value}
+- 最大结果行数：{max_results}（除非用户明确指定更多）
+- 可用工具：sql_db_query（必须调用）
 
-**重要**: 您必须调用 sql_db_query 工具来执行查询。
+[Evidence]
+（数据库表名和 Schema 已由前置节点注入到对话消息中）
 
-调用示例：
-- 查询用户：使用 sql_db_query 工具，参数为 {{"query": "SELECT id, nick_name FROM tb_user LIMIT 5"}}
-- 查询商店：使用 sql_db_query 工具，参数为 {{"query": "SELECT * FROM tb_shop WHERE area = '静安区' LIMIT 10"}}
+[Context]
+（无）
 
-请立即使用 sql_db_query 工具执行查询。
-        """.strip()
+[Output]
+- 生成语法正确的 {dialect.value} SQL 查询
+- 只查询必要的列，避免 SELECT *
+- 限制结果在 {max_results} 条以内（除非用户明确指定）
+- 必须调用 sql_db_query 工具执行查询
+- 示例：{{"query": "SELECT id, nick_name FROM tb_user LIMIT 5"}}""".strip()
     
     def _generate_query(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """节点: 生成并执行 SQL 查询。"""
@@ -479,7 +484,7 @@ Schema: tb_shop (id, name, score, area)
             
             logger.info("[SimpleQuery] Fix query generated")
             
-            messages.append(fix_message)
+            # 只追加 LLM 响应（含 tool_calls），不追加内部修复提示，避免历史记录污染
             messages.append(response)
             
             return {
@@ -492,8 +497,7 @@ Schema: tb_shop (id, name, score, area)
         except Exception as e:
             logger.error(f"[SimpleQuery] Error fixing query: {e}")
             messages = state.get("messages", [])
-            error_message = AIMessage(content=f"Error fixing query: {str(e)}")
-            messages.append(error_message)
+            # 错误时也不追加内部消息，保持对话历史干净
             return {
                 "messages": messages,
                 "retry_count": state.get("retry_count", 0) + 1,

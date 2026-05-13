@@ -148,8 +148,19 @@ async def _get_async_graph():
     return _async_graph
 
 
+async def initialize_async_graph_for_web():
+    """使用调用方的事件循环创建 Web 专用异步图（在服务器启动时调用一次）。"""
+    import aiosqlite
+    conn = await aiosqlite.connect(_CHECKPOINT_DB)
+    async_checkpointer = AsyncSqliteSaver(conn)
+    await async_checkpointer.setup()
+    g = create_sql_agent_graph(config, llm, checkpointer=async_checkpointer)
+    logger.info("Web async graph initialized with AsyncSqliteSaver")
+    return g
+
+
 # 导出图供 LangGraph CLI 使用
-__all__ = ["graph", "config", "run_query", "run_query_streaming"]
+__all__ = ["graph", "config", "run_query", "run_query_streaming", "initialize_async_graph_for_web"]
 
 # 持久事件循环：避免 asyncio.run() 每次销毁循环导致 aiosqlite Lock 跨循环失效
 _persistent_loop = asyncio.new_event_loop()

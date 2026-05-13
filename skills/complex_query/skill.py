@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END, START, add_messages
 from langgraph.types import Send
 
@@ -167,7 +168,7 @@ class ComplexQuerySkill(BaseSkill):
                 "retrieval_stats": {"error": str(e)},
             }
 
-    def _plan_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _plan_node(self, state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
         """
         Analyze the question and generate a multi-step query plan.
         Creates / updates the session plan file for task tracking.
@@ -178,9 +179,10 @@ class ComplexQuerySkill(BaseSkill):
         table_schema = state.get("table_schema", "")
         query_plan = state.get("query_plan", [])
         task_id = state.get("task_id", "")
+        thread_id = (config or {}).get("configurable", {}).get("thread_id", "")
         
         user_question = messages[0].content if messages else ""
-        
+
         if query_plan:
             logger.info("[ComplexQuery] Plan already exists, skipping planning")
             return {}
@@ -192,55 +194,53 @@ class ComplexQuerySkill(BaseSkill):
             if plan_context:
                 logger.info(f"[SessionPlan] Injecting plan progress into LLM context")
 
-        # Create planning prompt
-        plan_context_section = f"\n\n## 当前会话进度（请参考，避免重复已完成步骤）\n{plan_context}" if plan_context else ""
+        plan_context_inner = plan_context if plan_context else "（无）"
 
-        system_prompt = f"""You are a SQL query planner for MySQL database. Given a complex question, break it down into multiple independent sub-queries.
+        system_prompt = f"""[Role & Policies]
+您是一个 MySQL 数据库的多步查询规划专家。
+严格遵守 MySQL 兼容规则，输出纯 JSON，不加任何解释或 Markdown 包装。
 
-Available tables and schema:
+[Task]
+分析复杂问题，拆分为多个独立的 SQL 子查询步骤，生成可执行的查询计划。
+
+[Environment]
+- 数据库方言：MySQL
+- 子查询步骤间依赖通过占位符 {{step_N_results}} 传递（只能配合 IN 运算符）
+- MySQL 限制：IN 子查询内不允许使用 LIMIT
+- 保持查询简洁，避免深层嵌套子查询
+
+[Evidence]
+可用表和 Schema：
 {table_schema}
 
-**CRITICAL: How to use placeholders for dependent steps**:
-- Use `{{step_N_results}}` to reference results from step N
-- This placeholder will be replaced with VALUES like `(1, 2, 3)` - a list of IDs
-- Use it ONLY with IN operator: `WHERE column IN {{step_N_results}}`
-- DO NOT treat it as a table or subquery
+[Context]
+{plan_context_inner}
 
-**WRONG usage** (will cause syntax errors):
-❌ `SELECT id FROM ({{step_1_results}}) AS t`
-❌ `JOIN ({{step_1_results}}) t ON ...`
-❌ `WHERE id = {{step_1_results}}`
-
-**CORRECT usage**:
-✅ `WHERE type_id IN {{step_1_results}}`
-✅ `WHERE shop_id IN {{step_1_results}}`
-✅ `WHERE id IN {{step_1_results}} AND status = 'active'`
-
-**MySQL Compatibility Rules**:
-1. DO NOT use "LIMIT" inside subqueries with IN/ALL/ANY/SOME
-2. Keep queries simple and direct
-3. Avoid deeply nested subqueries
-
-**Output format (JSON)**:
+[Output]
+输出格式（纯 JSON）：
 {{
     "steps": [
         {{
-            "step_id": 1, 
-            "description": "Get top 3 shop type IDs", 
+            "step_id": 1,
+            "description": "获取 TOP 3 店铺类型 ID",
             "query": "SELECT id, name FROM tb_shop_type ORDER BY score DESC LIMIT 3",
             "depends_on": []
         }},
         {{
-            "step_id": 2, 
-            "description": "Count shops for each type", 
+            "step_id": 2,
+            "description": "统计各类型店铺数量",
             "query": "SELECT type_id, COUNT(*) FROM tb_shop WHERE type_id IN {{step_1_results}} GROUP BY type_id",
             "depends_on": [1]
         }}
     ]
 }}
 
-If the question is simple (single table, single query), output:
-{{"simple": true, "reason": "..."}}{plan_context_section}
+占位符规则：
+✅ WHERE column IN {{step_N_results}}
+❌ FROM ({{step_N_results}}) — 不允许
+❌ WHERE id = {{step_N_results}} — 不允许
+
+如果问题较简单（单表单查询），输出：{{"simple": true, "reason": "..."}}
 """
         
         plan_messages = [
@@ -277,6 +277,7 @@ If the question is simple (single table, single query), output:
                     description=user_question,
                     skill="complex_query",
                     steps=steps,
+                    thread_id=thread_id,
                 )
                 logger.info(f"[SessionPlan] Plan file: {self._plan_manager.get_plan_path(new_task_id)}")
             

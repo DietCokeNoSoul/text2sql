@@ -73,6 +73,7 @@ class SessionPlan:
     title: str
     description: str
     skill: str
+    thread_id: str = ""   # LangGraph thread_id — links plan to a chat session
     status: Literal["pending", "in_progress", "done", "failed"] = "in_progress"
     created_at: str = ""
     updated_at: str = ""
@@ -118,6 +119,7 @@ class SessionPlanManager:
         description: str,
         skill: str,
         steps: Optional[List[dict]] = None,
+        thread_id: str = "",
     ) -> SessionPlan:
         """创建并持久化新的任务计划。
 
@@ -134,6 +136,7 @@ class SessionPlanManager:
             title=title,
             description=description,
             skill=skill,
+            thread_id=thread_id,
             status="in_progress",
             created_at=now,
             updated_at=now,
@@ -160,6 +163,26 @@ class SessionPlanManager:
         except Exception as e:
             logger.warning(f"[SessionPlan] Failed to read plan {task_id}: {e}")
             return None
+
+    def list_plans_by_thread(self, thread_id: str) -> List[SessionPlan]:
+        """返回属于指定 thread_id 的所有任务计划（按创建时间倒序）。"""
+        if not self._base_dir.exists():
+            return []
+        plans = []
+        for plan_dir in self._base_dir.iterdir():
+            if not plan_dir.is_dir():
+                continue
+            json_file = plan_dir / "plan.json"
+            if not json_file.exists():
+                continue
+            try:
+                data = json.loads(json_file.read_text(encoding="utf-8"))
+                if data.get("thread_id", "") == thread_id:
+                    plans.append(_from_dict(data))
+            except Exception:
+                continue
+        plans.sort(key=lambda p: p.created_at, reverse=True)
+        return plans
 
     def update_step(
         self,
@@ -315,6 +338,7 @@ def _to_dict(plan: SessionPlan) -> dict:
         "title":      plan.title,
         "description": plan.description,
         "skill":      plan.skill,
+        "thread_id":  plan.thread_id,
         "status":     plan.status,
         "created_at": plan.created_at,
         "updated_at": plan.updated_at,
@@ -351,6 +375,7 @@ def _from_dict(data: dict) -> SessionPlan:
         title=data["title"],
         description=data.get("description", ""),
         skill=data["skill"],
+        thread_id=data.get("thread_id", ""),
         status=data["status"],
         created_at=data.get("created_at", ""),
         updated_at=data.get("updated_at", ""),
