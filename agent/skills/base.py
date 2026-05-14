@@ -80,6 +80,18 @@ class BaseSkill(ABC):
         # 构建图
         self.graph = self._build_graph()
     
+    @staticmethod
+    def _build_constraints_block(constraints: list) -> str:
+        """Build a [Constraints] prompt block from the user-defined constraint list."""
+        if not constraints:
+            return ""
+        lines = "\n".join(f"{i + 1}. ⛔ {c}" for i, c in enumerate(constraints))
+        return (
+            "\n\n[Constraints]\n"
+            "用户设定的硬性约束（始终遵守，优先级高于其他所有指令）：\n"
+            f"{lines}"
+        )
+
     @abstractmethod
     def _build_graph(self) -> StateGraph:
         """构建 Skill 的子图。

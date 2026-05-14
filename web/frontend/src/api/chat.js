@@ -16,6 +16,12 @@ export async function createSession() {
   return res.json()
 }
 
+export async function deleteSession(threadId) {
+  const res = await fetch(`${API_BASE}/sessions/${threadId}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error('Failed to delete session')
+  return res.json()
+}
+
 export async function renameSession(threadId, name) {
   const res = await fetch(`${API_BASE}/sessions/${threadId}`, {
     method: 'PATCH',
@@ -35,6 +41,40 @@ export async function getHistory(threadId) {
 export async function getPlans(threadId) {
   const res = await fetch(`${API_BASE}/sessions/${threadId}/plans`)
   if (!res.ok) return { plans: [] }
+  return res.json()
+}
+
+export async function listConstraints(threadId) {
+  const res = await fetch(`${API_BASE}/sessions/${threadId}/constraints`)
+  if (!res.ok) return { constraints: [] }
+  return res.json()
+}
+
+export async function addConstraint(threadId, content) {
+  const res = await fetch(`${API_BASE}/sessions/${threadId}/constraints`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+  if (!res.ok) throw new Error('Failed to add constraint')
+  return res.json()
+}
+
+export async function toggleConstraint(threadId, constraintId, enabled) {
+  const res = await fetch(`${API_BASE}/sessions/${threadId}/constraints/${constraintId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  if (!res.ok) throw new Error('Failed to toggle constraint')
+  return res.json()
+}
+
+export async function deleteConstraint(threadId, constraintId) {
+  const res = await fetch(`${API_BASE}/sessions/${threadId}/constraints/${constraintId}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) throw new Error('Failed to delete constraint')
   return res.json()
 }
 
@@ -58,6 +98,7 @@ export async function confirmSql(sessionId, action, reason = '') {
  *   onNodeEnd(node)
  *   onToken(content)
  *   onFullResponse(content)
+ *   onSqlStep(stepId, label, sql)   — fired for each SQL step executed
  *   onSqlConfirm(sql, sessionId) → Promise<{action, reason}>
  *   onDone()
  *   onError(message)
@@ -95,6 +136,9 @@ export function streamQuery(query, threadId, sessionId, callbacks) {
         }
         break
       }
+      case 'sql_step':
+        callbacks.onSqlStep?.(data.step_id, data.label, data.sql)
+        break
       case 'done':
         callbacks.onDone?.()
         es.close()

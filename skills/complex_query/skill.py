@@ -84,6 +84,8 @@ class ComplexQuerySkill(BaseSkill):
             retrieval_stats: dict
             # Session plan tracking
             task_id: str
+            constraints: list   # user-defined hard constraints
+            thread_id: str      # conversation thread id (injected by _make_skill_node)
         
         # Use custom state
         graph = StateGraph(ComplexQueryGraphState)
@@ -133,10 +135,18 @@ class ComplexQuerySkill(BaseSkill):
         
         return graph.compile()
     
+    def _get_user_question(self, state: Dict[str, Any]) -> str:
+        """Extract the first HumanMessage content from state."""
+        from langchain_core.messages import HumanMessage as HM
+        for msg in state.get("messages", []):
+            if isinstance(msg, HM):
+                return msg.content
+        msgs = state.get("messages", [])
+        return msgs[0].content if msgs else ""
+
     def _dual_tower_retrieve_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """双塔检索节点：用 Milvus + Steiner Tree 剪枝 schema。"""
-        messages = state.get("messages", [])
-        user_question = messages[0].content if messages else ""
+        user_question = self._get_user_question(state)
         full_schema = state.get("table_schema", "")
 
         logger.info(f"[DualTower] Retrieving schema for: {user_question[:80]}")
@@ -175,13 +185,12 @@ class ComplexQuerySkill(BaseSkill):
         """
         logger.info("[ComplexQuery] Planning multi-step query")
         
-        messages = state.get("messages", [])
         table_schema = state.get("table_schema", "")
         query_plan = state.get("query_plan", [])
         task_id = state.get("task_id", "")
-        thread_id = (config or {}).get("configurable", {}).get("thread_id", "")
+        thread_id = state.get("thread_id", "") or (config or {}).get("configurable", {}).get("thread_id", "")
         
-        user_question = messages[0].content if messages else ""
+        user_question = self._get_user_question(state)
 
         if query_plan:
             logger.info("[ComplexQuery] Plan already exists, skipping planning")
@@ -195,6 +204,7 @@ class ComplexQuerySkill(BaseSkill):
                 logger.info(f"[SessionPlan] Injecting plan progress into LLM context")
 
         plan_context_inner = plan_context if plan_context else "（无）"
+        constraints_block = self._build_constraints_block(state.get("constraints", []))
 
         system_prompt = f"""[Role & Policies]
 您是一个 MySQL 数据库的多步查询规划专家。
@@ -240,7 +250,7 @@ class ComplexQuerySkill(BaseSkill):
 ❌ FROM ({{step_N_results}}) — 不允许
 ❌ WHERE id = {{step_N_results}} — 不允许
 
-如果问题较简单（单表单查询），输出：{{"simple": true, "reason": "..."}}
+如果问题较简单（单表单查询），输出：{{"simple": true, "reason": "..."}}{constraints_block}
 """
         
         plan_messages = [
@@ -344,6 +354,18 @@ class ComplexQuerySkill(BaseSkill):
         for step in ready_steps:
             step_id = step["step_id"]
             query = step["query"]
+
+            # ── 用户禁令守卫：执行前硬性拦截 ──────────────────────────────────
+            from agent.constraint_guard import check_constraints, build_block_message
+            from agent.sql_errors import UserPolicyError
+            try:
+                check_constraints(query, state.get("constraints", []))
+            except UserPolicyError as ce:
+                logger.warning(f"[ComplexQuery] Blocked by constraint: {ce.matched_keyword!r}")
+                from langchain_core.messages import AIMessage
+                messages = list(state.get("messages", []))
+                messages.append(AIMessage(content=build_block_message(ce)))
+                return {"messages": messages, "plan_completed": True, "step_results": state.get("step_results", {})}
             task_id = state.get("task_id", "")
             
             # ── Session plan: mark step in_progress ───────────────────────
@@ -399,6 +421,10 @@ class ComplexQuerySkill(BaseSkill):
                 }
                 logger.info(f"[ComplexQuery] Step {step_id} executed successfully (retries={exec_result['retries']})")
 
+                # ── Emit SQL step event for live frontend ─────────────────
+                from agent import sql_step_emitter
+                sql_step_emitter.emit(str(step_id), step["description"], exec_result["final_sql"])
+
                 # ── Session plan: mark step done ──────────────────────────
                 if self._plan_manager and task_id:
                     result_preview = str(result)[:200] if result else ""
@@ -432,7 +458,15 @@ class ComplexQuerySkill(BaseSkill):
                         f"SQL: {exec_result['final_sql'][:150]}\n错误: {error_str[:150]}",
                     )
         
-        return {"step_results": step_results}
+        # Add SQL step messages for history reconstruction
+        sql_msgs = []
+        for sr in step_results.values():
+            if sr.get("success") and sr.get("query"):
+                sql_msgs.append(AIMessage(
+                    content=f"__sql__:{sr['step_id']}:{sr['description']}:{sr['query']}"
+                ))
+        
+        return {"step_results": step_results, "messages": sql_msgs}
     
     def _resolve_query_placeholders(self, query: str, depends_on: List[int], step_results: Dict) -> str:
         """
@@ -516,7 +550,9 @@ class ComplexQuerySkill(BaseSkill):
             
             result_text += f"Step {step_id}: {step['description']}\n"
             
-            if result.get("success"):
+            if result.get("skipped"):
+                result_text += f"Status: 用户跳过此步骤（无查询结果）\n\n"
+            elif result.get("success"):
                 result_text += f"Result: {result['result']}\n\n"
             else:
                 result_text += f"Error: {result.get('error', 'Unknown error')}\n\n"

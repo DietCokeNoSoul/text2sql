@@ -1,5 +1,5 @@
 """
-SQL Error Classification System — 7 Categories, 38 Error Types
+SQL Error Classification System — 8 Categories, 40 Error Types
 
 Provides:
   - A hierarchy of typed SQLError exceptions (one per error kind)
@@ -17,6 +17,7 @@ Categories
   SECURITY    – blocked DML / DDL / injection attempts       (5 types)
   PERFORMANCE – resource / cardinality issues                (4 types)
   CONSTRAINT  – data-integrity violations, no LLM fix        (2 types)
+  USER_POLICY – user-defined hard constraints violated       (2 types)
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ class SQLErrorCategory(str, Enum):
     SECURITY    = "security"
     PERFORMANCE = "performance"
     CONSTRAINT  = "constraint"
+    USER_POLICY = "user_policy"
     UNKNOWN     = "unknown"
 
 
@@ -272,6 +274,50 @@ class DuplicateKeyError(ConstraintError):
 
 class ForeignKeyViolationError(ConstraintError):
     """Foreign key constraint violated."""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3.8  USER_POLICY errors  (2 types)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class UserPolicyError(SQLError):
+    """Base for errors caused by user-defined hard constraints (禁令).
+
+    fix_strategy = "fail_fast": never retry with LLM; report to user immediately.
+
+    Attributes:
+        matched_constraint: the exact constraint text that triggered the block
+        matched_keyword:    the keyword extracted from the SQL that matched
+        sql:                the blocked SQL statement
+    """
+    category = SQLErrorCategory.USER_POLICY
+    fix_strategy = "fail_fast"
+
+    def __init__(
+        self,
+        message: str,
+        matched_constraint: str = "",
+        matched_keyword: str = "",
+        sql: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.matched_constraint = matched_constraint
+        self.matched_keyword = matched_keyword
+        self.sql = sql
+
+    def __str__(self) -> str:
+        return (
+            f"⛔ 禁令拦截：该查询违反了用户禁令「{self.matched_constraint}」"
+            f"（匹配关键词：{self.matched_keyword}）"
+        )
+
+
+class TableConstraintViolationError(UserPolicyError):
+    """SQL references a table name that is explicitly forbidden by the user."""
+
+
+class ColumnConstraintViolationError(UserPolicyError):
+    """SQL references a column name that is explicitly forbidden by the user."""
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -9,46 +9,79 @@
     <div v-else class="ai-message">
       <!-- 有步骤数据（流式 / 刚完成） -->
       <template v-if="message.steps?.length">
-        <div
-          v-for="(step, i) in message.steps"
-          :key="i"
-          class="step-row"
-          :class="'type-' + step.type"
-        >
-          <!-- 普通路由步骤（流式中才显示，完成后已被过滤） -->
-          <template v-if="step.type === 'plain'">
-            <span class="step-label-plain">{{ step.label }}</span>
-            <span v-if="step.status === 'done'" class="step-check-inline">✓</span>
-            <span v-else class="step-dots-ani"><span/><span/><span/></span>
-          </template>
+        <template v-for="(item, i) in groupedSteps" :key="i">
 
-          <!-- SQL 步骤 -->
-          <template v-else-if="step.type === 'sql'">
-            <div class="step-header-row">
-              <span class="step-section-label">{{ step.label }}</span>
-              <span v-if="step.status === 'done'" class="step-check">✓</span>
-              <span v-else-if="step.status === 'skipped'" class="step-skip">跳过</span>
-              <span v-else class="step-dots-ani"><span/><span/><span/></span>
-            </div>
-            <div v-if="step.content" class="sql-block">
-              <pre><code>{{ step.content }}</code></pre>
-            </div>
-          </template>
+          <!-- 普通路由步骤 -->
+          <div v-if="item.type === 'plain'" class="step-row type-plain">
+            <span class="step-label-plain">{{ item.label }}</span>
+            <span v-if="item.status === 'done'" class="step-check-inline">✓</span>
+            <span v-else class="step-dots-ani"><span/><span/><span/></span>
+          </div>
+
+          <!-- SQL 步骤组（流式期间展开，完成后二级折叠） -->
+          <div v-else-if="item.type === 'sql-group'" class="step-row type-sql">
+            <template v-if="message.streaming">
+              <!-- 流式中：平铺显示 -->
+              <div v-for="(s, si) in item.items" :key="si">
+                <div class="step-header-row">
+                  <span class="step-section-label">{{ s.label }}</span>
+                  <span v-if="s.status === 'done'" class="step-check">✓</span>
+                  <span v-else-if="s.status === 'skipped'" class="step-skip">跳过</span>
+                  <span v-else class="step-dots-ani"><span/><span/><span/></span>
+                </div>
+                <div v-if="s.content" class="sql-block">
+                  <pre><code>{{ s.content }}</code></pre>
+                </div>
+              </div>
+            </template>
+            <template v-else>
+              <!-- 完成后：一级折叠入口 -->
+              <div class="step-header-row clickable" @click="toggleSqlGroup">
+                <span class="step-section-label">SQL 查询</span>
+                <span class="step-check">✓</span>
+                <span class="sql-toggle" :class="{ expanded: sqlGroupExpanded }">▾</span>
+              </div>
+              <!-- 一级展开内容 -->
+              <div v-if="sqlGroupExpanded" class="sql-group-body">
+                <!-- 只有一条 SQL：直接显示代码 -->
+                <template v-if="item.items.length === 1">
+                  <div v-if="item.items[0].content" class="sql-block">
+                    <pre><code>{{ item.items[0].content }}</code></pre>
+                  </div>
+                </template>
+                <!-- 多条 SQL：二级折叠列表 -->
+                <template v-else>
+                  <div v-for="(s, si) in item.items" :key="si" class="sql-child">
+                    <div class="step-header-row clickable child" @click="toggleSql(si)">
+                      <span class="step-section-label child-label">{{ s.label }}</span>
+                      <span v-if="s.status === 'skipped'" class="step-skip">跳过</span>
+                      <span v-else class="step-check">✓</span>
+                      <span v-if="s.content" class="sql-toggle" :class="{ expanded: expandedSqls.has(si) }">▾</span>
+                    </div>
+                    <div v-if="s.content && expandedSqls.has(si)" class="sql-block">
+                      <pre><code>{{ s.content }}</code></pre>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
 
           <!-- 回答步骤 -->
-          <template v-else-if="step.type === 'answer'">
+          <div v-else-if="item.type === 'answer'" class="step-row type-answer">
             <div class="step-header-row">
-              <span class="step-section-label">{{ step.content ? '回答' : '正在处理…' }}</span>
-              <span v-if="step.status === 'streaming'" class="cursor">▍</span>
+              <span class="step-section-label">{{ item.content ? '回答' : '正在处理…' }}</span>
+              <span v-if="item.status === 'streaming'" class="cursor">▍</span>
             </div>
-            <div v-if="step.content" class="answer-content markdown-body">
-              <span v-html="renderMarkdown(step.content)" />
+            <div v-if="item.content" class="answer-content markdown-body">
+              <span v-html="renderMarkdown(item.content)" />
             </div>
-            <div v-else-if="step.status !== 'done'" class="inline-wait">
+            <div v-else-if="item.status !== 'done'" class="inline-wait">
               <span class="step-dots-ani"><span/><span/><span/></span>
             </div>
-          </template>
-        </div>
+          </div>
+
+        </template>
       </template>
 
       <!-- 初始等待（还没有任何步骤） -->
@@ -65,10 +98,60 @@
 </template>
 
 <script setup>
+import { ref, computed, watch } from 'vue'
 import { marked } from 'marked'
 
-defineProps({
+const props = defineProps({
   message: { type: Object, required: true },
+})
+
+// 一级：SQL 组是否展开
+const sqlGroupExpanded = ref(false)
+// 二级：各子 SQL 是否展开（Set of index）
+const expandedSqls = ref(new Set())
+
+// 将 steps 数组中的所有 sql 类型聚合为一个 sql-group
+const groupedSteps = computed(() => {
+  const steps = props.message.steps || []
+  const result = []
+  let sqlBuf = []
+
+  const flushSql = () => {
+    if (sqlBuf.length) {
+      result.push({ type: 'sql-group', items: sqlBuf })
+      sqlBuf = []
+    }
+  }
+
+  for (const step of steps) {
+    if (step.type === 'sql') {
+      sqlBuf.push(step)
+    } else {
+      flushSql()
+      result.push(step)
+    }
+  }
+  flushSql()
+  return result
+})
+
+function toggleSqlGroup() {
+  sqlGroupExpanded.value = !sqlGroupExpanded.value
+}
+
+function toggleSql(i) {
+  const s = new Set(expandedSqls.value)
+  if (s.has(i)) s.delete(i)
+  else s.add(i)
+  expandedSqls.value = s
+}
+
+// 流式结束时，重置折叠状态（全部收起）
+watch(() => props.message.streaming, (streaming) => {
+  if (!streaming) {
+    sqlGroupExpanded.value = false
+    expandedSqls.value = new Set()
+  }
 })
 
 function renderMarkdown(text) {
@@ -155,6 +238,47 @@ function renderMarkdown(text) {
 
 .step-check { color: #67c23a; font-size: 13px; }
 .step-skip  { color: #909399; font-size: 12px; }
+
+/* 折叠箭头 */
+.step-header-row.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+.step-header-row.clickable:hover .step-section-label {
+  color: #409eff;
+}
+.sql-toggle {
+  margin-left: auto;
+  font-size: 14px;
+  color: #909399;
+  transition: transform 0.2s ease;
+  display: inline-block;
+  transform: rotate(-90deg);
+}
+.sql-toggle.expanded {
+  transform: rotate(0deg);
+}
+
+/* SQL 组内容区 */
+.sql-group-body {
+  margin-top: 2px;
+}
+
+/* 子级 SQL 项 */
+.sql-child {
+  margin-left: 12px;
+  border-left: 2px solid #ebeef5;
+  padding-left: 8px;
+  margin-bottom: 4px;
+}
+.step-header-row.child {
+  margin-bottom: 4px;
+}
+.child-label {
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: #606266 !important;
+}
 
 /* 等待动画（三点） */
 .step-dots-ani {

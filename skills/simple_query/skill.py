@@ -43,6 +43,11 @@ class SimpleQuerySkill(BaseSkill):
         """
         self.db_manager = db_manager
         self.confirm_enabled = confirm_enabled
+
+        # Plan manager for task chain tracking
+        from agent.session_plan import SessionPlanManager
+        _plan_dir = Path(__file__).parent.parent.parent / "report" / "sessions"
+        self._plan_manager = SessionPlanManager(str(_plan_dir))
         
         _md = Path(__file__).parent / "SKILL.md"
         super().__init__(
@@ -68,6 +73,10 @@ class SimpleQuerySkill(BaseSkill):
             retry_count: int
             last_error: str
             last_sql: str
+            constraints: list   # user-defined hard constraints
+            task_id: str        # plan task id for tracking
+            thread_id: str      # conversation thread id (injected by _make_skill_node)
+            validation_feedback: str  # semantic validation failure reason
         
         builder = StateGraph(SimpleQueryState)
         
@@ -76,6 +85,7 @@ class SimpleQuerySkill(BaseSkill):
         builder.add_node("get_schema", self.common.create_get_schema_node())
         builder.add_node("generate_query", self._generate_query)
         builder.add_node("execute_query", self._execute_with_error_capture)
+        builder.add_node("validate_result", self._validate_result)
         builder.add_node("fix_query", self._fix_query)
         
         # 定义流程
@@ -84,18 +94,28 @@ class SimpleQuerySkill(BaseSkill):
         builder.add_edge("get_schema", "generate_query")
         builder.add_edge("generate_query", "execute_query")
         
-        # 条件路由：根据执行结果决定是结束还是修复
+        # 条件路由：执行失败 → fix_query；执行成功 → validate_result
         builder.add_conditional_edges(
             "execute_query",
             self._should_retry,
             {
                 "fix": "fix_query",
-                "end": END
+                "validate": "validate_result",
+                "end": END,
+            }
+        )
+        
+        # 条件路由：结果校验失败 → fix_query；通过 → END
+        builder.add_conditional_edges(
+            "validate_result",
+            self._should_fix_after_validation,
+            {
+                "fix": "fix_query",
+                "end": END,
             }
         )
         
         builder.add_edge("fix_query", "execute_query")
-        
         
         return builder.compile()
     
@@ -121,6 +141,26 @@ class SimpleQuerySkill(BaseSkill):
 [Evidence]
 （数据库表名和 Schema 已由前置节点注入到对话消息中）
 
+[Semantic Disambiguation — CRITICAL]
+正确理解用户意图，不要混淆以下概念：
+
+▸ "数据库中有多少条**记录**" / "有多少条**数据**" / "总共有多少**行**"
+  → 需要统计**所有表的行数之和**
+  → 正确写法（SQLite / MySQL 均适用）：
+     SELECT SUM(cnt) AS total_rows FROM (
+       SELECT COUNT(*) AS cnt FROM table1
+       UNION ALL SELECT COUNT(*) FROM table2
+       -- ... 每张表都要列出
+     ) t
+  → ❌ 错误：SELECT COUNT(*) FROM information_schema.TABLES（这是查表的数量，不是行数）
+  → ❌ 错误：只 COUNT 一张表
+
+▸ "数据库有多少张**表**" / "有哪些**表**"
+  → SELECT COUNT(*) / name FROM ... 关于 schema 的元信息查询
+
+▸ "某张表有多少条记录"
+  → SELECT COUNT(*) FROM specific_table
+
 [Context]
 （无）
 
@@ -131,14 +171,38 @@ class SimpleQuerySkill(BaseSkill):
 - 必须调用 sql_db_query 工具执行查询
 - 示例：{{"query": "SELECT id, nick_name FROM tb_user LIMIT 5"}}""".strip()
     
-    def _generate_query(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_query(self, state: Dict[str, Any], config: Optional[dict] = None) -> Dict[str, Any]:
         """节点: 生成并执行 SQL 查询。"""
         try:
             logger.info("[SimpleQuery] Generating and executing SQL query")
+
+            # ── Session plan: create plan for this query ──────────────────
+            thread_id = state.get("thread_id", "") or (config or {}).get("configurable", {}).get("thread_id", "")
+            messages_list = state.get("messages", [])
+            user_question = ""
+            for msg in reversed(messages_list):
+                if hasattr(msg, "type") and msg.type == "human":
+                    user_question = msg.content
+                    break
+            task_id = ""
+            if self._plan_manager:
+                task_id = self._plan_manager.new_task_id()
+                self._plan_manager.create_plan(
+                    task_id=task_id,
+                    title=user_question[:80],
+                    description=user_question,
+                    skill="simple_query",
+                    thread_id=thread_id,
+                    steps=[
+                        {"step_id": 1, "description": "generate_query: 生成SQL查询", "depends_on": []},
+                        {"step_id": 2, "description": "execute_query: 执行SQL查询", "depends_on": [1]},
+                    ],
+                )
+                self._plan_manager.update_step(task_id, 1, "in_progress")
             
             system_message = {
                 "role": "system",
-                "content": self._get_generate_system_prompt(),
+                "content": self._get_generate_system_prompt() + self._build_constraints_block(state.get("constraints", [])),
             }
             
             # 绑定查询工具
@@ -153,22 +217,24 @@ class SimpleQuerySkill(BaseSkill):
             # 检查是否有工具调用
             if not hasattr(response, 'tool_calls') or not response.tool_calls:
                 logger.warning("[SimpleQuery] No tool calls generated, trying again with explicit instruction")
-                # 如果没有工具调用，添加明确指令
                 explicit_message = HumanMessage(
                     content="请使用 sql_db_query 工具来执行 SQL 查询。"
                 )
                 response = llm_with_tools.invoke([system_message] + messages + [explicit_message])
             
             logger.info("[SimpleQuery] Query generated successfully")
+            if self._plan_manager and task_id:
+                self._plan_manager.update_step(task_id, 1, "done")
+                self._plan_manager.update_step(task_id, 2, "in_progress")
             
             messages.append(response)
             
-            # 初始化重试计数
             return {
                 "messages": messages,
                 "retry_count": 0,
                 "last_error": "",
-                "last_sql": ""
+                "last_sql": "",
+                "task_id": task_id,
             }
             
         except Exception as e:
@@ -180,7 +246,8 @@ class SimpleQuerySkill(BaseSkill):
                 "messages": messages,
                 "retry_count": 0,
                 "last_error": str(e),
-                "last_sql": ""
+                "last_sql": "",
+                "task_id": "",
             }
     
     def _execute_with_error_capture(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -200,6 +267,11 @@ class SimpleQuerySkill(BaseSkill):
                 tool_call = last_message.tool_calls[0]
                 sql_query = tool_call.get("args", {}).get("query", "")
             
+            # ── 用户禁令守卫（在执行前硬性拦截）──────────────────────────────
+            if sql_query:
+                from agent.constraint_guard import check_constraints
+                check_constraints(sql_query, state.get("constraints", []))
+
             # ── SQL 执行前用户确认 ────────────────────────────────────────────
             if self.confirm_enabled and sql_query:
                 from agent.sql_confirm import prompt_sql_confirmation, build_skip_message
@@ -214,6 +286,20 @@ class SimpleQuerySkill(BaseSkill):
                 
                 # 成功执行
                 logger.info("[SimpleQuery] Query executed successfully")
+
+                # ── 发射 SQL 步骤事件供前端实时显示 ──────────────────────
+                from agent import sql_step_emitter
+                sql_step_emitter.emit("1", "SQL 查询", sql_query)
+
+                # ── Session plan: mark step 2 done ────────────────────────
+                task_id = state.get("task_id", "")
+                if self._plan_manager and task_id:
+                    self._plan_manager.update_step(
+                        task_id, 2, "done",
+                        sql=sql_query,
+                        result_summary=str(result)[:200],
+                    )
+                    self._plan_manager.mark_complete(task_id, success=True)
                 
                 from langchain_core.messages import ToolMessage
                 tool_message = ToolMessage(
@@ -258,12 +344,35 @@ class SimpleQuerySkill(BaseSkill):
         except Exception as e:
             from agent.types import SQLSkippedByUser
             from agent.sql_confirm import build_skip_message
+            from agent.sql_errors import UserPolicyError
+            from agent.constraint_guard import build_block_message
+            if isinstance(e, UserPolicyError):
+                logger.warning(f"[SimpleQuery] SQL blocked by user constraint: {e.matched_keyword!r}")
+                messages = state.get("messages", [])
+                messages.append(AIMessage(content=build_block_message(e)))
+                # ── plan: 标记被禁令拦截 ─────────────────────────────────
+                task_id = state.get("task_id", "")
+                if self._plan_manager and task_id:
+                    self._plan_manager.update_step(task_id, 2, "skipped",
+                                                   result_summary="被禁令拦截")
+                    self._plan_manager.mark_complete(task_id, success=False)
+                return {
+                    "messages": messages,
+                    "retry_count": 999,  # 阻止重试
+                    "last_error": "blocked_by_constraint",
+                    "last_sql": e.sql,
+                }
             if isinstance(e, SQLSkippedByUser):
                 logger.info(f"[SimpleQuery] SQL skipped by user: {e.sql[:60]}")
                 skip_msg_content = build_skip_message(e.sql, e.reason)
-                from langchain_core.messages import AIMessage
                 messages = state.get("messages", [])
                 messages.append(AIMessage(content=skip_msg_content))
+                # ── plan: 标记被用户跳过 ─────────────────────────────────
+                task_id = state.get("task_id", "")
+                if self._plan_manager and task_id:
+                    self._plan_manager.update_step(task_id, 2, "skipped",
+                                                   result_summary=f"用户跳过: {e.reason or '无原因'}")
+                    self._plan_manager.mark_complete(task_id, success=False)
                 return {
                     "messages": messages,
                     "retry_count": 999,  # 阻止重试
@@ -274,28 +383,26 @@ class SimpleQuerySkill(BaseSkill):
             return state
     
     def _should_retry(self, state: Dict[str, Any]) -> str:
-        """条件边: 判断是否需要重试。"""
+        """条件边: 判断是否需要重试。执行成功时路由到 validate_result。"""
         retry_count = state.get("retry_count", 0)
         last_error = state.get("last_error", "")
         
-        # 如果没有错误，结束
-        if not last_error:
-            logger.info("[SimpleQuery] Query succeeded, ending")
+        # 用户跳过或被禁令拦截，直接结束
+        if last_error in ("skipped_by_user", "blocked_by_constraint"):
+            logger.info(f"[SimpleQuery] Not retrying: {last_error}")
             return "end"
         
-        # 用户跳过 SQL，不重试
-        if last_error == "skipped_by_user":
-            logger.info("[SimpleQuery] SQL skipped by user, ending without retry")
-            return "end"
+        # 执行出错 → 重试修复
+        if last_error:
+            if retry_count >= 3:
+                logger.warning(f"[SimpleQuery] Max retries ({retry_count}) reached, ending")
+                return "end"
+            logger.info(f"[SimpleQuery] Error detected, will retry (attempt {retry_count + 1}/3)")
+            return "fix"
         
-        # 如果重试次数超过3次，结束
-        if retry_count >= 3:
-            logger.warning(f"[SimpleQuery] Max retries ({retry_count}) reached, ending")
-            return "end"
-        
-        # 需要修复
-        logger.info(f"[SimpleQuery] Error detected, will retry (attempt {retry_count + 1}/3)")
-        return "fix"
+        # 执行成功 → 语义校验
+        logger.info("[SimpleQuery] Query succeeded, validating result semantics")
+        return "validate"
     
     def _get_fix_system_prompt(self) -> str:
         """获取修复查询的系统提示。"""
@@ -434,30 +541,127 @@ Schema: tb_shop (id, name, score, area)
 {suggestions_text}
 """.strip()
 
+    def _validate_result(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """节点: 语义校验 —— 用 LLM 判断 SQL 执行结果是否真正回答了用户问题。"""
+        try:
+            messages = state.get("messages", [])
+            last_sql = state.get("last_sql", "")
+            retry_count = state.get("retry_count", 0)
+
+            # 若已多次重试，跳过验证避免死循环
+            if retry_count >= 2:
+                logger.info("[SimpleQuery] Skipping semantic validation after retries")
+                return {"validation_feedback": ""}
+
+            # 提取最近一次工具执行结果（ToolMessage）
+            tool_result = ""
+            for msg in reversed(messages):
+                if hasattr(msg, "type") and msg.type == "tool":
+                    tool_result = str(msg.content)[:1000]
+                    break
+                if hasattr(msg, "__class__") and msg.__class__.__name__ == "ToolMessage":
+                    tool_result = str(msg.content)[:1000]
+                    break
+
+            if not tool_result:
+                logger.info("[SimpleQuery] No tool result found, skipping validation")
+                return {"validation_feedback": ""}
+
+            # 提取用户原始问题
+            user_question = ""
+            for msg in messages:
+                role = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else None)
+                if role == "human":
+                    user_question = str(msg.content if hasattr(msg, "content") else msg.get("content", ""))
+                    break
+
+            validation_prompt = f"""请判断以下 SQL 查询结果是否正确回答了用户的问题。
+
+用户问题：{user_question}
+
+执行的 SQL：
+```sql
+{last_sql}
+```
+
+SQL 执行结果（摘要）：
+{tool_result}
+
+---
+请从语义层面严格判断：
+1. SQL 的查询意图与用户问题是否一致？
+2. 结果的数据是否真正回答了用户的问题？
+
+如果一致，回复：VALID
+如果不一致，回复：INVALID: <简短说明原因，不超过50字>
+
+只回复 VALID 或 INVALID: xxx，不要其他内容。"""
+
+            response = self.llm.invoke([
+                {"role": "system", "content": "你是一个 SQL 结果语义校验器，只需判断结果是否回答了问题，简短准确。"},
+                {"role": "human", "content": validation_prompt},
+            ])
+
+            verdict = str(response.content).strip()
+            logger.info(f"[SimpleQuery] Validation verdict: {verdict}")
+
+            if verdict.upper().startswith("VALID") and not verdict.upper().startswith("INVALID"):
+                return {"validation_feedback": ""}
+            else:
+                # 提取 INVALID 后的原因
+                reason = verdict[len("INVALID:"):].strip() if ":" in verdict else "结果与问题意图不符"
+                logger.warning(f"[SimpleQuery] Semantic validation failed: {reason}")
+                return {"validation_feedback": reason}
+
+        except Exception as e:
+            logger.error(f"[SimpleQuery] Error in validate_result: {e}")
+            return {"validation_feedback": ""}
+
+    def _should_fix_after_validation(self, state: Dict[str, Any]) -> str:
+        """条件边: 校验失败则重新修复，通过则结束。"""
+        feedback = state.get("validation_feedback", "")
+        if feedback:
+            logger.info(f"[SimpleQuery] Validation failed, routing to fix: {feedback}")
+            return "fix"
+        return "end"
+
     def _fix_query(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """节点: 引导式错误纠正（含列名模糊匹配建议）。"""
+        """节点: 引导式错误纠正（含列名模糊匹配建议 / 语义校验反馈）。"""
         try:
             retry_count = state.get("retry_count", 0)
             last_error = state.get("last_error", "")
             last_sql = state.get("last_sql", "")
+            validation_feedback = state.get("validation_feedback", "")
             
             logger.info(f"[SimpleQuery] Fixing query (attempt {retry_count + 1}/3)")
-            logger.info(f"[SimpleQuery] Last error: {last_error}")
-            logger.info(f"[SimpleQuery] Last SQL: {last_sql}")
-            
-            # 构建列名模糊匹配建议
-            column_hint = self._build_column_hint(last_error)
-            if column_hint:
-                logger.info(f"[SimpleQuery] Column hint generated: {column_hint[:200]}")
+            logger.info(f"[SimpleQuery] Last error: {last_error}, Validation feedback: {validation_feedback}")
             
             system_message = {
                 "role": "system",
-                "content": self._get_fix_system_prompt(),
+                "content": self._get_fix_system_prompt() + self._build_constraints_block(state.get("constraints", [])),
             }
             
-            # 构建修复提示（含列名建议）
-            column_section = f"\n\n{column_hint}" if column_hint else "\n\n（请查看之前消息中的 schema 信息）"
-            fix_prompt = f"""
+            if validation_feedback:
+                # 来自语义校验的修复：SQL 执行成功但结果不对
+                fix_prompt = f"""请重新生成 SQL 查询。
+
+**上一次查询**：
+```sql
+{last_sql}
+```
+
+**语义校验发现的问题**：
+{validation_feedback}
+
+请根据上述问题重新分析用户意图，生成语义正确的 SQL 查询。
+使用 sql_db_query 工具执行修复后的查询。""".strip()
+            else:
+                # 来自执行错误的修复
+                column_hint = self._build_column_hint(last_error)
+                if column_hint:
+                    logger.info(f"[SimpleQuery] Column hint generated: {column_hint[:200]}")
+                column_section = f"\n\n{column_hint}" if column_hint else "\n\n（请查看之前消息中的 schema 信息）"
+                fix_prompt = f"""
 请修复以下 SQL 查询：
 
 **原始查询**：
@@ -471,7 +675,7 @@ Schema: tb_shop (id, name, score, area)
 
 请分析错误原因，并生成修复后的正确 SQL 查询。
 使用 sql_db_query 工具执行修复后的查询。
-            """.strip()
+                """.strip()
             
             fix_message = HumanMessage(content=fix_prompt)
             
@@ -491,16 +695,17 @@ Schema: tb_shop (id, name, score, area)
                 "messages": messages,
                 "retry_count": retry_count + 1,
                 "last_error": last_error,
-                "last_sql": last_sql
+                "last_sql": last_sql,
+                "validation_feedback": "",  # 清空校验反馈，避免重复路由
             }
             
         except Exception as e:
             logger.error(f"[SimpleQuery] Error fixing query: {e}")
             messages = state.get("messages", [])
-            # 错误时也不追加内部消息，保持对话历史干净
             return {
                 "messages": messages,
                 "retry_count": state.get("retry_count", 0) + 1,
                 "last_error": state.get("last_error", ""),
-                "last_sql": state.get("last_sql", "")
+                "last_sql": state.get("last_sql", ""),
+                "validation_feedback": "",
             }

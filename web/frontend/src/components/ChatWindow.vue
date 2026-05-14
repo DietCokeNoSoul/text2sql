@@ -57,13 +57,14 @@ import MessageBubble from './MessageBubble.vue'
 import { streamQuery, getHistory } from '../api/chat.js'
 
 const props = defineProps({
-  threadId: { type: String, required: true },
-  sessionId: { type: String, required: true },
+  threadId: { type: String, default: '' },
+  sessionId: { type: String, default: '' },
 })
 
 const emit = defineEmits(['session-named', 'query-start', 'query-done'])
 
 const openSqlConfirm = inject('openSqlConfirm')
+const ensureSession = inject('ensureSession')
 
 const messages = ref([])
 const inputText = ref('')
@@ -78,8 +79,8 @@ const suggestions = [
 
 // 切换 session 时重新加载历史
 watch(() => props.threadId, async (newId) => {
+  messages.value = []
   if (newId) {
-    messages.value = []
     await loadHistory(newId)
   }
 })
@@ -91,9 +92,12 @@ async function loadHistory(threadId) {
 
     // 历史 AI 消息重建为 steps 格式，与流式完成后保持一致
     const steps = []
-    if (m.sql) {
-      steps.push({ key: 'sql_gen', label: 'SQL 查询', type: 'sql', status: 'done', content: m.sql })
-    }
+    // 支持新的 sqls 数组（也兼容旧的 sql 字段）
+    const sqls = m.sqls || (m.sql ? [m.sql] : [])
+    sqls.forEach((sql, idx) => {
+      const label = sqls.length > 1 ? `SQL 查询 ${idx + 1}` : 'SQL 查询'
+      steps.push({ key: `sql_${idx}`, label, type: 'sql', status: 'done', content: sql })
+    })
     steps.push({ key: 'answer', label: '回答', type: 'answer', status: 'done', content: m.content })
     return { role: 'assistant', content: m.content, steps, streaming: false }
   })
@@ -103,6 +107,14 @@ async function loadHistory(threadId) {
 async function submitQuery(text) {
   const query = (text ?? inputText.value).trim()
   if (!query || isStreaming.value) return
+
+  // 如果当前没有活跃会话，先创建一个
+  if (!props.threadId) {
+    await ensureSession?.()
+    // 等待 threadId prop 更新（下一个微任务）
+    await new Promise(r => setTimeout(r, 0))
+    if (!props.threadId) return  // 创建失败则放弃
+  }
 
   inputText.value = ''
   isStreaming.value = true
@@ -156,8 +168,10 @@ async function submitQuery(text) {
     },
     async onSqlConfirm(sql, sessionId) {
       const steps = messages.value[aiIdx].steps
-      let sqlIdx = steps.findIndex(s => s.key === 'sql_gen')
+      // 找空槽（无内容的占位符），避免覆盖已确认的 SQL
+      let sqlIdx = steps.findIndex(s => s.key === 'sql_gen' && !s.content)
       if (sqlIdx === -1) {
+        // 没有空槽，追加新槽
         steps.push({ key: 'sql_gen', label: 'SQL 查询', type: 'sql', status: 'pending', content: '' })
         sqlIdx = steps.length - 1
       }
@@ -171,12 +185,35 @@ async function submitQuery(text) {
 
       const result = await openSqlConfirm?.(sql, sessionId)
       const isSkip = result?.action === 'skip'
+      // 赋予唯一 key，防止后续调用再次找到并覆盖此槽
       steps.splice(sqlIdx, 1, {
         ...steps[sqlIdx],
+        key: `sql_confirm_${Date.now()}_${sqlIdx}`,
         status: isSkip ? 'skipped' : 'done',
         label: isSkip ? 'SQL 查询（已跳过）' : 'SQL 查询',
       })
       return result
+    },
+    onSqlStep(stepId, label, sql) {
+      // 每个 SQL 步骤执行后触发，为复杂查询/数据分析生成独立的 SQL 气泡
+      const steps = messages.value[aiIdx].steps
+      // Dedup: 相同内容已存在（如 onSqlConfirm 已显示），跳过
+      if (steps.some(s => s.type === 'sql' && s.content === sql)) return
+      // 找第一个空的占位符（pending 且无内容）
+      const emptyIdx = steps.findIndex(s => s.type === 'sql' && s.status === 'pending' && !s.content)
+      const newStep = {
+        key: `sql_step_${stepId}`,
+        label: label || `SQL 查询 ${stepId}`,
+        type: 'sql',
+        status: 'done',
+        content: sql,
+      }
+      if (emptyIdx !== -1) {
+        steps.splice(emptyIdx, 1, newStep)
+      } else {
+        steps.push(newStep)
+      }
+      scrollToBottom()
     },
     onToken(content) {
       const steps = messages.value[aiIdx].steps

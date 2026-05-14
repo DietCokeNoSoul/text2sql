@@ -97,7 +97,18 @@ _FORMAT_ANSWER_SYSTEM_PROMPT = """[Role & Policies]
 - 直接回答用户问题，不重复 SQL 语句
 - 如果结果是数字，说明含义（如"共有 1006 个用户"）
 - 如果结果是列表，摘要展示（不超过 10 条详细列出，更多则说明总数）
-- 使用中文回答"""
+- 使用中文回答
+
+[证据不足处理规则 — 必须严格遵守]
+⚠️ 如果查询结果为空（空列表、空字符串、0 行）：
+  - 明确告知用户"未查询到相关数据"
+  - 不要猜测或推断可能的答案
+  - 给出可能的原因（如条件过严、字段名有误等）和后续建议
+⚠️ 如果结果部分缺失或数据不足以回答问题：
+  - 明确说明"当前数据不足以给出确切答案"
+  - 描述已获取到的信息，指出缺少什么
+  - 建议用户如何补充查询
+⚠️ 禁止在证据不足时给出确定性结论。宁可说"无法确认"，也不要编造一个貌似正确的答案。"""
 
 
 class SkillBasedGraphBuilder:
@@ -200,9 +211,14 @@ class SkillBasedGraphBuilder:
     
     def _make_skill_node(self, skill) -> Callable:
         """Create a graph node callable for the given skill."""
-        def skill_node(state: Dict[str, Any]) -> Dict[str, Any]:
+        def skill_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
             logger.info(f"[Main] Executing skill: {skill.name}")
-            result = skill.invoke(state)
+            config = config or {}
+            # Inject thread_id into state so subgraph nodes receive it reliably
+            # even when LangGraph's config propagation to nested subgraph nodes is unreliable.
+            thread_id = (config.get("configurable") or {}).get("thread_id", "")
+            enriched_state = {**state, "thread_id": thread_id} if thread_id else state
+            result = skill.invoke(enriched_state, config)
             return {
                 "messages": result.get("messages", []),
                 "skill_result": result,
@@ -220,6 +236,7 @@ class SkillBasedGraphBuilder:
             query_intent: str   # "general_chat" | "db_query"
             query_type: str     # skill name (set only when query_intent == "db_query")
             skill_result: dict  # result from selected skill
+            constraints: list   # [str, ...] user-defined hard constraints
         
         logger.info("Building Skill-based main graph")
         
@@ -291,8 +308,10 @@ class SkillBasedGraphBuilder:
         messages = state.get("messages", [])
         current_question = self._latest_human_message(state)
         thread_id = self._extract_thread_id(config)
+        constraints = state.get("constraints", [])
+        constraints_block = self._build_constraints_block(constraints)
 
-        classification_messages = [SystemMessage(content=_INTENT_SYSTEM_PROMPT)]
+        classification_messages = [SystemMessage(content=_INTENT_SYSTEM_PROMPT + constraints_block)]
 
         if self._memory is not None and thread_id:
             # Use memory manager: get filtered + summarized context
@@ -356,8 +375,10 @@ class SkillBasedGraphBuilder:
         logger.info("[General Chat] Responding without DB")
         messages = state.get("messages", [])
         thread_id = self._extract_thread_id(config)
+        constraints = state.get("constraints", [])
+        constraints_block = self._build_constraints_block(constraints)
 
-        chat_messages = [SystemMessage(content=_GENERAL_CHAT_SYSTEM_PROMPT)]
+        chat_messages = [SystemMessage(content=_GENERAL_CHAT_SYSTEM_PROMPT + constraints_block)]
 
         if self._memory is not None and thread_id:
             ctx = self._memory.get_context(thread_id, messages)
@@ -373,18 +394,65 @@ class SkillBasedGraphBuilder:
         """Format the raw SQL query result into a natural language answer."""
         from langchain_core.messages import ToolMessage
         messages = state.get("messages", [])
-        # Collect recent context: last human message + any tool results
+        constraints = state.get("constraints", [])
+        constraints_block = self._build_constraints_block(constraints)
         user_question = self._latest_human_message(state)
-        tool_results = [
-            m.content for m in messages
-            if isinstance(m, ToolMessage) and m.content
+
+        # ── Isolate current-turn messages (after the last HumanMessage) ──────
+        last_human_idx = -1
+        for i, m in enumerate(messages):
+            if isinstance(m, HumanMessage):
+                last_human_idx = i
+        current_turn_msgs = messages[last_human_idx + 1:] if last_human_idx >= 0 else messages
+
+        # ── 1. Check for skip/block signals FIRST ────────────────────────────
+        # Must happen before tool_results check because list_tables ToolMessages
+        # are always present and would mask skip/block events otherwise.
+        from agent.sql_confirm import SKIP_SIGNAL_TAG, parse_skip_signal
+        for msg in reversed(current_turn_msgs):
+            content = getattr(msg, "content", "")
+            if not isinstance(content, str):
+                continue
+            if SKIP_SIGNAL_TAG in content:
+                parsed = parse_skip_signal(content)
+                sql_text, reason = parsed if parsed else ("", "")
+                reason_part = f"\n\n跳过原因：{reason}" if reason else ""
+                friendly = (
+                    f"⚠️ **SQL 查询已跳过**\n\n"
+                    f"您选择跳过了本次 SQL 执行，未返回查询结果。{reason_part}\n\n"
+                    f"如需重新查询，请再次提问。"
+                )
+                return {"messages": [AIMessage(content=friendly)]}
+            if "⛔" in content:
+                return {"messages": [AIMessage(content=content)]}
+
+        # ── 2. Collect SQL query ToolMessages (not list_tables / schema) ─────
+        SQL_TOOL_NAME = "sql_db_query"
+        sql_tool_results = [
+            m.content for m in current_turn_msgs
+            if isinstance(m, ToolMessage)
+            and getattr(m, "name", "") == SQL_TOOL_NAME
+            and m.content
         ]
-        if not tool_results:
-            # No SQL result — nothing to format, skip
+
+        # ── 3. Fallback: aggregate AIMessage from complex_query ───────────────
+        aggregate_results = [
+            m.content for m in current_turn_msgs
+            if isinstance(m, AIMessage)
+            and isinstance(getattr(m, "content", ""), str)
+            and m.content.startswith("Query execution results:")
+        ]
+
+        if sql_tool_results:
+            result_text = "\n".join(sql_tool_results[-5:])
+        elif aggregate_results:
+            result_text = aggregate_results[-1]
+        else:
+            # Nothing to format
             return {}
-        result_text = "\n".join(tool_results[-3:])  # at most last 3 tool outputs
+
         format_messages = [
-            SystemMessage(content=_FORMAT_ANSWER_SYSTEM_PROMPT),
+            SystemMessage(content=_FORMAT_ANSWER_SYSTEM_PROMPT + constraints_block),
             HumanMessage(content=f"用户问题：{user_question}\n\nSQL 查询结果：\n{result_text}"),
         ]
         response = await self.llm.ainvoke(format_messages)
@@ -404,6 +472,8 @@ class SkillBasedGraphBuilder:
         user_question = self._latest_human_message(state)
         skill_descriptions = self.registry.build_router_prompt()
         valid_names = self.registry.list_skills()
+        constraints = state.get("constraints", [])
+        constraints_block = self._build_constraints_block(constraints)
 
         system_prompt = f"""你是一个数据库查询分类器。根据用户问题，从以下可用技能中选择最合适的一个。
 
@@ -411,7 +481,7 @@ class SkillBasedGraphBuilder:
 
 规则：
 - 只输出技能名称，不要输出任何其他内容
-- 必须是以下名称之一：{valid_names}
+- 必须是以下名称之一：{valid_names}{constraints_block}
 """
         classification_messages = [
             SystemMessage(content=system_prompt),
@@ -436,6 +506,18 @@ class SkillBasedGraphBuilder:
         return query_type
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_constraints_block(constraints: list) -> str:
+        """Build a [Constraints] prompt block from the user-defined constraint list."""
+        if not constraints:
+            return ""
+        lines = "\n".join(f"{i + 1}. ⛔ {c}" for i, c in enumerate(constraints))
+        return (
+            "\n\n[Constraints]\n"
+            "用户设定的硬性约束（始终遵守，优先级高于其他所有指令）：\n"
+            f"{lines}"
+        )
 
     @staticmethod
     def _latest_human_message(state: Dict[str, Any]) -> str:

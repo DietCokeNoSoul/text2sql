@@ -4,9 +4,15 @@
     <el-aside width="260px" class="sidebar">
       <div class="sidebar-header">
         <span class="sidebar-title">🤖 Text2SQL</span>
-        <el-button type="primary" size="small" @click="newSession" :icon="Plus">新对话</el-button>
+        <el-button
+          type="primary"
+          size="small"
+          @click="newSession"
+          :icon="Plus"
+        >新对话</el-button>
       </div>
 
+      <!-- 会话列表 -->
       <div class="session-list">
         <div
           v-for="session in sessions"
@@ -17,6 +23,9 @@
         >
           <el-icon><ChatDotRound /></el-icon>
           <span class="session-name">{{ session.name }}</span>
+          <el-icon class="session-delete" @click="deleteSessionItem(session, $event)" title="删除会话">
+            <Delete />
+          </el-icon>
         </div>
       </div>
 
@@ -40,7 +49,7 @@
   <!-- SQL 确认弹窗（全局）-->
   <SqlConfirmDialog ref="sqlConfirmDialogRef" />
 
-  <!-- 任务链路抽屉 -->
+  <!-- 任务链路 + 禁令抽屉 -->
   <PlanDrawer
     :thread-id="currentThreadId"
     :visible="drawerVisible"
@@ -51,11 +60,11 @@
 
 <script setup>
 import { ref, onMounted, provide } from 'vue'
-import { Plus, ChatDotRound } from '@element-plus/icons-vue'
+import { Plus, ChatDotRound, Delete } from '@element-plus/icons-vue'
 import ChatWindow from './components/ChatWindow.vue'
 import SqlConfirmDialog from './components/SqlConfirmDialog.vue'
 import PlanDrawer from './components/PlanDrawer.vue'
-import { createSession, listSessions, renameSession } from './api/chat.js'
+import { createSession, listSessions, renameSession, deleteSession } from './api/chat.js'
 
 const sessions = ref([])
 const currentThreadId = ref('')
@@ -64,7 +73,6 @@ const sqlConfirmDialogRef = ref(null)
 const drawerVisible = ref(false)
 const queryRunning = ref(false)
 
-// 将 SQL 确认弹窗的打开函数提供给子组件（通过 provide/inject）
 provide('openSqlConfirm', (sql, sessionId) => {
   return sqlConfirmDialogRef.value?.open(sql, sessionId)
 })
@@ -100,6 +108,41 @@ function generateSessionId() {
   return Math.random().toString(36).slice(2)
 }
 
+async function deleteSessionItem(session, event) {
+  event.stopPropagation()
+  try {
+    await deleteSession(session.threadId)
+  } catch { /* 非致命 */ }
+  const idx = sessions.value.findIndex(s => s.threadId === session.threadId)
+  sessions.value.splice(idx, 1)
+  if (session.threadId === currentThreadId.value) {
+    if (sessions.value.length > 0) {
+      const next = sessions.value[Math.min(idx, sessions.value.length - 1)]
+      currentThreadId.value = next.threadId
+      currentSessionId.value = next.sessionId
+    } else {
+      // 允许空状态，等用户提问时再创建
+      currentThreadId.value = ''
+      currentSessionId.value = ''
+    }
+  }
+}
+
+async function ensureSession() {
+  if (currentThreadId.value) return
+  const data = await createSession()
+  const session = {
+    threadId: data.thread_id,
+    sessionId: generateSessionId(),
+    name: data.name || '新对话',
+  }
+  sessions.value.unshift(session)
+  currentThreadId.value = session.threadId
+  currentSessionId.value = session.sessionId
+}
+
+provide('ensureSession', ensureSession)
+
 onMounted(async () => {
   try {
     const { sessions: saved } = await listSessions()
@@ -113,10 +156,9 @@ onMounted(async () => {
       const first = sessions.value[0]
       currentThreadId.value = first.threadId
       currentSessionId.value = first.sessionId
-      return
     }
-  } catch { /* 服务器未准备好时回退 */ }
-  await newSession()
+    // 无历史会话时保持空状态，等用户提问再创建
+  } catch { /* 服务器未准备好时保持空状态 */ }
 })
 </script>
 
@@ -184,6 +226,23 @@ html, body, #app { height: 100%; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+}
+
+.session-delete {
+  opacity: 0;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: rgba(255,255,255,0.5);
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.session-item:hover .session-delete {
+  opacity: 1;
+}
+
+.session-delete:hover {
+  color: #f56c6c !important;
 }
 
 .sidebar-footer {

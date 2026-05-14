@@ -1,20 +1,20 @@
-2026-05-11 19:34:08 - agent.logging_config - [32mINFO[0m - Logging configured - Level: INFO, File: None
-2026-05-11 19:34:08 - agent.graph - [32mINFO[0m - Initialized LLM: tongyi:qwen-plus (retry=3)
-2026-05-11 19:34:08 - agent.graph - [32mINFO[0m - LLM SQLite cache enabled: .langchain_cache.db
-2026-05-11 19:34:08 - agent.skill_graph_builder - [32mINFO[0m - Creating Skill-based SQL Agent graph
-2026-05-11 19:34:08 - agent.database - [32mINFO[0m - [RedisSchemaCache] Connected to Redis 127.0.0.1:6379/0, prefix='text2sql:schema:', ttl=300s
-2026-05-11 19:34:08 - agent.database - [32mINFO[0m - Connecting to database: mysql+pymysql://root:1234@127.0.0.1:3306/dianpng
-2026-05-11 19:34:08 - agent.database - [32mINFO[0m - Successfully connected to mysql database
-2026-05-11 19:34:08 - agent.database - [32mINFO[0m - [SecurityGuard] Initialized with dialect=mysql, allowed=['SELECT'], max_rows=1000
-2026-05-11 19:34:08 - agent.schema_graph - [32mINFO[0m - [SchemaGraph] Built graph: 11 nodes, 0 FK edges, 11 inferred edges
-2026-05-11 19:34:08 - agent.retrieval - [32mINFO[0m - [DualTower] Schema graph: SchemaGraph: 11 tables, 11 edges
-2026-05-11 19:34:09 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loaded existing collection 'text2sql_columns'
-2026-05-11 19:34:09 - agent.column_index - [32mINFO[0m - [ColumnIndex] Dropping old collection for rebuild...
-2026-05-11 19:34:10 - agent.column_index - [32mINFO[0m - [ColumnIndex] Created collection 'text2sql_columns'
-2026-05-11 19:34:13 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loading embedding model: paraphrase-multilingual-MiniLM-L12-v2
-2026-05-11 19:34:13 - sentence_transformers.base.model - [32mINFO[0m - No device provided, using cpu
-2026-05-11 19:34:13 - sentence_transformers.base.model - [32mINFO[0m - Loading SentenceTransformer model from sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2.
-Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 7386.43it/s]
+2026-05-14 16:53:04 - agent.logging_config - [32mINFO[0m - Logging configured - Level: INFO, File: None
+2026-05-14 16:53:05 - agent.graph - [32mINFO[0m - Initialized LLM: tongyi:qwen-plus (retry=3)
+2026-05-14 16:53:05 - agent.graph - [32mINFO[0m - LLM SQLite cache enabled: .langchain_cache.db
+2026-05-14 16:53:05 - agent.skill_graph_builder - [32mINFO[0m - Creating Skill-based SQL Agent graph
+2026-05-14 16:53:05 - agent.database - [32mINFO[0m - [RedisSchemaCache] Connected to Redis 127.0.0.1:6379/0, prefix='text2sql:schema:', ttl=300s
+2026-05-14 16:53:05 - agent.database - [32mINFO[0m - Connecting to database: mysql+pymysql://root:1234@127.0.0.1:3306/dianpng
+2026-05-14 16:53:05 - agent.database - [32mINFO[0m - Successfully connected to mysql database
+2026-05-14 16:53:05 - agent.database - [32mINFO[0m - [SecurityGuard] Initialized with dialect=mysql, allowed=['SELECT'], max_rows=1000
+2026-05-14 16:53:05 - agent.schema_graph - [32mINFO[0m - [SchemaGraph] Built graph: 11 nodes, 0 FK edges, 11 inferred edges
+2026-05-14 16:53:05 - agent.retrieval - [32mINFO[0m - [DualTower] Schema graph: SchemaGraph: 11 tables, 11 edges
+2026-05-14 16:53:07 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loaded existing collection 'text2sql_columns'
+2026-05-14 16:53:07 - agent.column_index - [32mINFO[0m - [ColumnIndex] Dropping old collection for rebuild...
+2026-05-14 16:53:08 - agent.column_index - [32mINFO[0m - [ColumnIndex] Created collection 'text2sql_columns'
+2026-05-14 16:53:17 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loading embedding model: paraphrase-multilingual-MiniLM-L12-v2
+2026-05-14 16:53:17 - sentence_transformers.base.model - [32mINFO[0m - No device provided, using cpu
+2026-05-14 16:53:17 - sentence_transformers.base.model - [32mINFO[0m - Loading SentenceTransformer model from sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 4721.71it/s]
 [1mBertModel LOAD REPORT[0m from: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 Key                     | Status     |  | 
 ------------------------+------------+--+-
@@ -22,91 +22,63 @@ embeddings.position_ids | UNEXPECTED |  |
 
 Notes:
 - UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
-2026-05-11 19:34:15 - agent.column_index - [32mINFO[0m - [ColumnIndex] Embedding model loaded and cached: paraphrase-multilingual-MiniLM-L12-v2
-2026-05-11 19:34:15 - agent.column_index - [32mINFO[0m - [ColumnIndex] Encoding 96 columns...
-2026-05-11 19:34:16 - agent.column_index - [32mINFO[0m - [ColumnIndex] Index built: 96 columns indexed
-2026-05-11 19:34:16 - agent.retrieval - [32mINFO[0m - [DualTower] Index ready: 96 cols, 8400ms
-2026-05-11 19:34:16 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] DualTowerRetriever ready
-2026-05-11 19:34:16 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] SessionPlanManager ready (dir=report\sessions)
-2026-05-11 19:34:16 - agent.skill_graph_builder - [32mINFO[0m - Initializing Skills...
-2026-05-11 19:34:16 - agent.skills.registry - [32mINFO[0m - Skill registry initialized
-2026-05-11 19:34:16 - agent.skills.registry - [32mINFO[0m - Registered skill: simple_query
-2026-05-11 19:34:16 - agent.skills.registry - [32mINFO[0m - Registered skill: complex_query
-2026-05-11 19:34:16 - agent.skills.registry - [32mINFO[0m - Registered skill: data_analysis
-2026-05-11 19:34:16 - agent.skill_graph_builder - [32mINFO[0m - Skills registered: ['simple_query', 'complex_query', 'data_analysis']
-2026-05-11 19:34:16 - agent.skill_graph_builder - [32mINFO[0m - Building Skill-based main graph
-2026-05-11 19:34:16 - agent.skill_graph_builder - [32mINFO[0m - Skill-based SQL Agent graph created successfully
-2026-05-11 19:34:16 - agent.graph - [32mINFO[0m - SQL Agent graph created successfully with memory support
-INFO:     Started server process [8956]
+2026-05-14 16:53:21 - agent.column_index - [32mINFO[0m - [ColumnIndex] Embedding model loaded and cached: paraphrase-multilingual-MiniLM-L12-v2
+2026-05-14 16:53:21 - agent.column_index - [32mINFO[0m - [ColumnIndex] Encoding 96 columns...
+2026-05-14 16:53:23 - agent.column_index - [32mINFO[0m - [ColumnIndex] Index built: 96 columns indexed
+2026-05-14 16:53:23 - agent.retrieval - [32mINFO[0m - [DualTower] Index ready: 96 cols, 18555ms
+2026-05-14 16:53:23 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] DualTowerRetriever ready
+2026-05-14 16:53:23 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] SessionPlanManager ready (dir=report\sessions)
+2026-05-14 16:53:23 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] ConversationMemoryManager ready
+2026-05-14 16:53:23 - agent.skill_graph_builder - [32mINFO[0m - Initializing Skills...
+c:\Users\71949\Desktop\text2sql\skills\simple_query\skill.py:86: UserWarning: The 'config' parameter should be typed as 'RunnableConfig' or 'RunnableConfig | None', not 'typing.Optional[dict]'. 
+  builder.add_node("generate_query", self._generate_query)
+2026-05-14 16:53:24 - agent.skills.registry - [32mINFO[0m - Skill registry initialized
+2026-05-14 16:53:24 - agent.skills.registry - [32mINFO[0m - Registered skill: simple_query
+2026-05-14 16:53:24 - agent.skills.registry - [32mINFO[0m - Registered skill: complex_query
+2026-05-14 16:53:24 - agent.skills.registry - [32mINFO[0m - Registered skill: data_analysis
+2026-05-14 16:53:24 - agent.skill_graph_builder - [32mINFO[0m - Skills registered: ['simple_query', 'complex_query', 'data_analysis']
+2026-05-14 16:53:24 - agent.skill_graph_builder - [32mINFO[0m - Building Skill-based main graph
+2026-05-14 16:53:24 - agent.skill_graph_builder - [32mINFO[0m - Skill-based SQL Agent graph created successfully
+2026-05-14 16:53:24 - agent.graph - [32mINFO[0m - SQL Agent graph created successfully with memory support
+INFO:     Started server process [5628]
 INFO:     Waiting for application startup.
-2026-05-11 19:34:16 - web.server - [32mINFO[0m - Sessions DB ready
-2026-05-11 19:34:16 - web.server - [32mINFO[0m - Initializing web async graph...
-2026-05-11 19:34:16 - agent.skill_graph_builder - [32mINFO[0m - Creating Skill-based SQL Agent graph
-2026-05-11 19:34:17 - agent.database - [32mINFO[0m - [RedisSchemaCache] Connected to Redis 127.0.0.1:6379/0, prefix='text2sql:schema:', ttl=300s
-2026-05-11 19:34:17 - agent.database - [32mINFO[0m - Connecting to database: mysql+pymysql://root:1234@127.0.0.1:3306/dianpng
-2026-05-11 19:34:17 - agent.database - [32mINFO[0m - Successfully connected to mysql database
-2026-05-11 19:34:17 - agent.database - [32mINFO[0m - [SecurityGuard] Initialized with dialect=mysql, allowed=['SELECT'], max_rows=1000
-2026-05-11 19:34:17 - agent.schema_graph - [32mINFO[0m - [SchemaGraph] Built graph: 11 nodes, 0 FK edges, 11 inferred edges
-2026-05-11 19:34:17 - agent.retrieval - [32mINFO[0m - [DualTower] Schema graph: SchemaGraph: 11 tables, 11 edges
-2026-05-11 19:34:17 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loaded existing collection 'text2sql_columns'
-2026-05-11 19:34:17 - agent.column_index - [32mINFO[0m - [ColumnIndex] Dropping old collection for rebuild...
-2026-05-11 19:34:18 - agent.column_index - [32mINFO[0m - [ColumnIndex] Created collection 'text2sql_columns'
-2026-05-11 19:34:18 - agent.column_index - [32mINFO[0m - [ColumnIndex] Encoding 96 columns...
-2026-05-11 19:34:19 - agent.column_index - [32mINFO[0m - [ColumnIndex] Index built: 96 columns indexed
-2026-05-11 19:34:19 - agent.retrieval - [32mINFO[0m - [DualTower] Index ready: 96 cols, 2798ms
-2026-05-11 19:34:19 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] DualTowerRetriever ready
-2026-05-11 19:34:19 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] SessionPlanManager ready (dir=report\sessions)
-2026-05-11 19:34:19 - agent.skill_graph_builder - [32mINFO[0m - Initializing Skills...
-2026-05-11 19:34:19 - agent.skills.registry - [32mINFO[0m - Skill registry initialized
-2026-05-11 19:34:19 - agent.skills.registry - [32mINFO[0m - Registered skill: simple_query
-2026-05-11 19:34:19 - agent.skills.registry - [32mINFO[0m - Registered skill: complex_query
-2026-05-11 19:34:19 - agent.skills.registry - [32mINFO[0m - Registered skill: data_analysis
-2026-05-11 19:34:19 - agent.skill_graph_builder - [32mINFO[0m - Skills registered: ['simple_query', 'complex_query', 'data_analysis']
-2026-05-11 19:34:19 - agent.skill_graph_builder - [32mINFO[0m - Building Skill-based main graph
-2026-05-11 19:34:19 - agent.skill_graph_builder - [32mINFO[0m - Skill-based SQL Agent graph created successfully
-2026-05-11 19:34:19 - agent.graph - [32mINFO[0m - Web async graph initialized with AsyncSqliteSaver
-2026-05-11 19:34:19 - web.server - [32mINFO[0m - Web async graph ready
+2026-05-14 16:53:24 - web.server - [32mINFO[0m - Sessions DB ready
+2026-05-14 16:53:24 - web.server - [32mINFO[0m - Initializing web async graph...
+2026-05-14 16:53:24 - agent.skill_graph_builder - [32mINFO[0m - Creating Skill-based SQL Agent graph
+2026-05-14 16:53:24 - agent.database - [32mINFO[0m - [RedisSchemaCache] Connected to Redis 127.0.0.1:6379/0, prefix='text2sql:schema:', ttl=300s
+2026-05-14 16:53:24 - agent.database - [32mINFO[0m - Connecting to database: mysql+pymysql://root:1234@127.0.0.1:3306/dianpng
+2026-05-14 16:53:24 - agent.database - [32mINFO[0m - Successfully connected to mysql database
+2026-05-14 16:53:24 - agent.database - [32mINFO[0m - [SecurityGuard] Initialized with dialect=mysql, allowed=['SELECT'], max_rows=1000
+2026-05-14 16:53:24 - agent.schema_graph - [32mINFO[0m - [SchemaGraph] Built graph: 11 nodes, 0 FK edges, 11 inferred edges
+2026-05-14 16:53:24 - agent.retrieval - [32mINFO[0m - [DualTower] Schema graph: SchemaGraph: 11 tables, 11 edges
+2026-05-14 16:53:24 - agent.column_index - [32mINFO[0m - [ColumnIndex] Loaded existing collection 'text2sql_columns'
+2026-05-14 16:53:24 - agent.column_index - [32mINFO[0m - [ColumnIndex] Dropping old collection for rebuild...
+2026-05-14 16:53:25 - agent.column_index - [32mINFO[0m - [ColumnIndex] Created collection 'text2sql_columns'
+2026-05-14 16:53:25 - agent.column_index - [32mINFO[0m - [ColumnIndex] Encoding 96 columns...
+2026-05-14 16:53:27 - agent.column_index - [32mINFO[0m - [ColumnIndex] Index built: 96 columns indexed
+2026-05-14 16:53:27 - agent.retrieval - [32mINFO[0m - [DualTower] Index ready: 96 cols, 3510ms
+2026-05-14 16:53:27 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] DualTowerRetriever ready
+2026-05-14 16:53:27 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] SessionPlanManager ready (dir=report\sessions)
+2026-05-14 16:53:27 - agent.skill_graph_builder - [32mINFO[0m - [SkillBuilder] ConversationMemoryManager ready
+2026-05-14 16:53:27 - agent.skill_graph_builder - [32mINFO[0m - Initializing Skills...
+c:\Users\71949\Desktop\text2sql\skills\simple_query\skill.py:86: UserWarning: The 'config' parameter should be typed as 'RunnableConfig' or 'RunnableConfig | None', not 'typing.Optional[dict]'. 
+  builder.add_node("generate_query", self._generate_query)
+2026-05-14 16:53:27 - agent.skills.registry - [32mINFO[0m - Skill registry initialized
+2026-05-14 16:53:27 - agent.skills.registry - [32mINFO[0m - Registered skill: simple_query
+2026-05-14 16:53:27 - agent.skills.registry - [32mINFO[0m - Registered skill: complex_query
+2026-05-14 16:53:27 - agent.skills.registry - [32mINFO[0m - Registered skill: data_analysis
+2026-05-14 16:53:27 - agent.skill_graph_builder - [32mINFO[0m - Skills registered: ['simple_query', 'complex_query', 'data_analysis']
+2026-05-14 16:53:27 - agent.skill_graph_builder - [32mINFO[0m - Building Skill-based main graph
+2026-05-14 16:53:27 - agent.skill_graph_builder - [32mINFO[0m - Skill-based SQL Agent graph created successfully
+2026-05-14 16:53:27 - agent.graph - [32mINFO[0m - Web async graph initialized with AsyncSqliteSaver
+2026-05-14 16:53:27 - web.server - [32mINFO[0m - Web async graph ready
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:63648 - "GET /api/sessions HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63650 - "GET /api/sessions/cf92bc2b-3666-4a08-ad06-f8e119b8320a/history HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65260 - "GET /api/sessions HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65262 - "GET /api/sessions/cf92bc2b-3666-4a08-ad06-f8e119b8320a/history HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57109 - "GET /api/sessions HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57111 - "GET /api/sessions/cf92bc2b-3666-4a08-ad06-f8e119b8320a/history HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57113 - "POST /api/sessions HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57115 - "GET /api/sessions/0e3bc77b-bf8f-49db-b043-5029f1f436c7/history HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57119 - "GET /api/chat/stream?query=%E6%95%B0%E6%8D%AE%E5%BA%93%E4%B8%AD%E6%9C%89%E5%A4%9A%E5%B0%91%E6%9D%A1%E8%AE%B0%E5%BD%95%EF%BC%9F&thread_id=0e3bc77b-bf8f-49db-b043-5029f1f436c7&session_id=iqgu91gbqwg HTTP/1.1" 200 OK
-2026-05-11 19:35:14 - agent.skill_graph_builder - [32mINFO[0m - [L1 Router] Classifying intent
-INFO:     127.0.0.1:57117 - "PATCH /api/sessions/0e3bc77b-bf8f-49db-b043-5029f1f436c7 HTTP/1.1" 200 OK
-2026-05-11 19:35:14 - agent.skill_graph_builder - [32mINFO[0m - [L1 Router] Intent → db_query
-2026-05-11 19:35:14 - agent.skill_graph_builder - [32mINFO[0m - [L2 Router] Classifying query complexity
-2026-05-11 19:35:14 - agent.skill_graph_builder - [32mINFO[0m - [L2 Router] Skill → simple_query
-2026-05-11 19:35:14 - agent.skill_graph_builder - [32mINFO[0m - [L2 Router] Routing to skill: simple_query
-2026-05-11 19:35:14 - agent.skill_graph_builder - [32mINFO[0m - [Main] Executing skill: simple_query
-2026-05-11 19:35:14 - agent.nodes.common - [32mINFO[0m - Executing list tables node (common)
-2026-05-11 19:35:14 - agent.tools - [32mINFO[0m - Creating SQL database toolkit
-2026-05-11 19:35:14 - agent.tools - [32mINFO[0m - Created toolkit with 4 tools
-2026-05-11 19:35:14 - agent.nodes.common - [32mINFO[0m - Listed tables: tb_blog, tb_blog_comments, tb_follow, tb_seckill_voucher, tb_shop, tb_shop_type, tb_sign, tb_user, tb_user_info, tb_voucher, tb_voucher_order
-2026-05-11 19:35:14 - agent.nodes.common - [32mINFO[0m - Executing get schema node (common)
-2026-05-11 19:35:14 - agent.nodes.common - [33mWARNING[0m - No tables found in state, fetching all tables
-2026-05-11 19:35:14 - agent.nodes.common - [32mINFO[0m - Fetching schema for tables: tb_blog, tb_blog_comments, tb_follow, tb_seckill_voucher, tb_shop, tb_shop_type, tb_sign, tb_user, tb_user_info, tb_voucher, tb_voucher_order
-2026-05-11 19:35:14 - agent.nodes.common - [32mINFO[0m - Schema retrieval completed (11690 characters)
-2026-05-11 19:35:14 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Generating and executing SQL query
-2026-05-11 19:35:15 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Query generated successfully
-2026-05-11 19:35:15 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Executing query with error capture
-INFO:     127.0.0.1:51503 - "GET /api/sessions/0e3bc77b-bf8f-49db-b043-5029f1f436c7/plans HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60025 - "POST /api/chat/confirm HTTP/1.1" 200 OK
-2026-05-11 19:35:16 - agent.database - [32mINFO[0m - [SecurityGuard] SQL rewritten by Layer 3: 'SELECT COUNT(*) AS total_records FROM tb_blog LIMIT 1000'
-2026-05-11 19:35:16 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Query executed successfully
-2026-05-11 19:35:16 - skills.simple_query.skill - [32mINFO[0m - [SimpleQuery] Query succeeded, ending
-INFO:     127.0.0.1:52863 - "GET /api/sessions/cf92bc2b-3666-4a08-ad06-f8e119b8320a/history HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58527 - "GET /api/sessions/0e3bc77b-bf8f-49db-b043-5029f1f436c7/history HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64797 - "GET /api/sessions/cf92bc2b-3666-4a08-ad06-f8e119b8320a/history HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52610 - "GET /api/sessions/0e3bc77b-bf8f-49db-b043-5029f1f436c7/history HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51455 - "GET /api/sessions/1ed75118-6871-434f-8096-60bd2f5c648c/history HTTP/1.1" 200 OK
+ERROR:    [Errno 10048] error while attempting to bind on address ('0.0.0.0', 8000): 通常每个套接字地址(协议/网络地址/端口)只允许使用一次。
+INFO:     Waiting for application shutdown.
+2026-05-14 16:53:27 - web.server - [32mINFO[0m - Shutting down web server
+INFO:     Application shutdown complete.
 forrtl: error (200): program aborting due to window-CLOSE event
 Image              PC                Routine            Line        Source             
-KERNELBASE.dll     00007FFD5E53A3CD  Unknown               Unknown  Unknown
-KERNEL32.DLL       00007FFD6035E8D7  Unknown               Unknown  Unknown
-ntdll.dll          00007FFD6104C3FC  Unknown               Unknown  Unknown
+KERNELBASE.dll     00007FFBC60DA3CD  Unknown               Unknown  Unknown
+KERNEL32.DLL       00007FFBC881E8D7  Unknown               Unknown  Unknown
+ntdll.dll          00007FFBC97CC3FC  Unknown               Unknown  Unknown

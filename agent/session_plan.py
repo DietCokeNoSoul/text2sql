@@ -218,6 +218,25 @@ class SessionPlanManager:
         plan.updated_at = now
         self._save(plan)
 
+    def add_step(
+        self,
+        task_id: str,
+        step: dict,
+    ) -> None:
+        """向现有计划追加一个新步骤（用于动态扩展子步骤）。"""
+        plan = self.get_plan(task_id)
+        if plan is None:
+            return
+        new_step = PlanStep(
+            step_id=step.get("step_id", len(plan.steps) + 1),
+            description=step.get("description", ""),
+            sql=step.get("query", ""),
+            status=step.get("status", "pending"),
+        )
+        plan.steps.append(new_step)
+        plan.updated_at = _now()
+        self._save(plan)
+
     def add_note(
         self,
         task_id: str,

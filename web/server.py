@@ -7,6 +7,7 @@ SSE 事件协议 (data 字段为 JSON 字符串):
     {"type": "node_start", "node": "intent_router", "label": "🔀 意图路由"}
     {"type": "node_end",   "node": "intent_router"}
     {"type": "token",      "content": "根据查询..."}
+    {"type": "sql_step",   "step_id": "1", "label": "查询用户总数", "sql": "SELECT ..."}
     {"type": "sql_confirm","sql": "SELECT ...", "session_id": "xxx"}
     {"type": "error",      "message": "..."}
     {"type": "done"}
@@ -46,6 +47,7 @@ sys.path.insert(0, str(_ROOT))
 
 from agent.graph import config as agent_config, initialize_async_graph_for_web, _NODE_LABELS, _CHECKPOINT_DB
 from agent import sql_confirm
+from agent import sql_step_emitter
 from langchain_core.messages import HumanMessage, AIMessage
 
 logger = logging.getLogger(__name__)
@@ -54,7 +56,7 @@ logger = logging.getLogger(__name__)
 _SESSIONS_DB = str(_CHECKPOINT_DB)
 
 async def _init_sessions_db():
-    """确保 sessions 表存在。"""
+    """确保 sessions / constraints 表存在。"""
     async with aiosqlite.connect(_SESSIONS_DB) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
@@ -62,6 +64,15 @@ async def _init_sessions_db():
                 name       TEXT NOT NULL DEFAULT '新对话',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS constraints (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id  TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                enabled    INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
             )
         """)
         await db.commit()
@@ -87,6 +98,45 @@ async def _db_list_sessions() -> list[dict]:
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+async def _db_delete_session(thread_id: str) -> None:
+    """删除一个会话及其所有关联数据（checkpoints / constraints / memory / plans）。"""
+    # 1. checkpoints.db — sessions, constraints, LangGraph checkpoints/writes
+    async with aiosqlite.connect(_SESSIONS_DB) as db:
+        await db.execute("DELETE FROM sessions WHERE thread_id = ?", (thread_id,))
+        await db.execute("DELETE FROM constraints WHERE thread_id = ?", (thread_id,))
+        # LangGraph SqliteSaver tables
+        for tbl in ("checkpoints", "checkpoint_writes", "checkpoint_blobs"):
+            try:
+                await db.execute(f"DELETE FROM {tbl} WHERE thread_id = ?", (thread_id,))
+            except Exception:
+                pass
+        await db.commit()
+
+    # 2. memory_cards.db — separate DB file next to checkpoints.db
+    _memory_db = str(_ROOT / "memory_cards.db")
+    try:
+        async with aiosqlite.connect(_memory_db) as db:
+            await db.execute("DELETE FROM memory_cards WHERE thread_id = ?", (thread_id,))
+            await db.execute("DELETE FROM memory_cursors WHERE thread_id = ?", (thread_id,))
+            await db.commit()
+    except Exception:
+        pass
+
+    # 3. report/sessions/ — plan JSON dirs that belong to this thread
+    plans_dir = _ROOT / "report" / "sessions"
+    if plans_dir.exists():
+        import shutil
+        for task_dir in plans_dir.iterdir():
+            json_file = task_dir / "plan.json"
+            if json_file.exists():
+                try:
+                    data = json.loads(json_file.read_text(encoding="utf-8"))
+                    if data.get("thread_id", "") == thread_id:
+                        shutil.rmtree(task_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
 
 async def _db_update_session(thread_id: str, name: str | None = None, touch: bool = False):
     sets, params = [], []
@@ -125,6 +175,14 @@ class NewSessionResponse(BaseModel):
 
 class PatchSessionRequest(BaseModel):
     name: str
+
+
+class AddConstraintRequest(BaseModel):
+    content: str
+
+
+class PatchConstraintRequest(BaseModel):
+    enabled: bool
 
 
 # ── 应用生命周期 ──────────────────────────────────────────────────────────────
@@ -205,6 +263,13 @@ async def rename_session(thread_id: str, body: PatchSessionRequest):
     return {"ok": True}
 
 
+@app.delete("/api/sessions/{thread_id}")
+async def delete_session(thread_id: str):
+    """删除会话及其所有历史数据（checkpoints / constraints / memory / plans）。"""
+    await _db_delete_session(thread_id)
+    return {"ok": True}
+
+
 @app.get("/api/sessions/{thread_id}/history")
 async def get_history(thread_id: str):
     """获取指定会话的历史消息。每轮对话只返回 SQL（如有）和最终 AI 回答。"""
@@ -238,15 +303,23 @@ async def get_history(thread_id: str):
             end = real_user_indices[k + 1] if k + 1 < len(real_user_indices) else len(raw)
             turn_msgs = raw[ui + 1:end]
 
-            # 从该轮消息中提取 SQL：找 AIMessage with tool_calls，取 query 参数
-            turn_sql = None
+            # 从该轮消息中提取 SQL：
+            # 1) AIMessage with tool_calls → simple_query 的工具调用 SQL
+            # 2) AIMessage content 以 __sql__: 开头 → complex/data_analysis 注入的 SQL 标记
+            turn_sqls = []
             for m in turn_msgs:
-                if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
-                    for tc in m.tool_calls:
-                        args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-                        q = args.get("query", "") or args.get("sql", "")
-                        if q:
-                            turn_sql = q  # 取最后一次执行的 SQL（纠错后最终版本）
+                if isinstance(m, AIMessage):
+                    if getattr(m, "tool_calls", None):
+                        for tc in m.tool_calls:
+                            args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                            q = args.get("query", "") or args.get("sql", "")
+                            if q:
+                                turn_sqls.append(q)
+                    elif isinstance(m.content, str) and m.content.startswith("__sql__:"):
+                        # Format: __sql__:{step_id}:{label}:{sql}
+                        parts = m.content.split(":", 3)
+                        if len(parts) == 4:
+                            turn_sqls.append(parts[3])
 
             # 最后一条有内容且无 tool_calls 的 AIMessage 为最终回答
             last_ai = None
@@ -259,7 +332,7 @@ async def get_history(thread_id: str):
                 messages.append({
                     "role": "assistant",
                     "content": last_ai,
-                    "sql": turn_sql,  # 可能为 None（general_chat 无 SQL）
+                    "sqls": turn_sqls,  # list of SQL strings (may be empty for general_chat)
                 })
 
         return {"messages": messages}
@@ -286,6 +359,73 @@ async def get_session_plans(thread_id: str):
     return {"plans": result}
 
 
+# ── Constraints CRUD ──────────────────────────────────────────────────────────
+
+@app.get("/api/sessions/{thread_id}/constraints")
+async def list_constraints(thread_id: str):
+    """获取指定会话的所有禁令。"""
+    async with aiosqlite.connect(_SESSIONS_DB) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, content, enabled, created_at FROM constraints WHERE thread_id = ? ORDER BY id",
+            (thread_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return {"constraints": [dict(r) for r in rows]}
+
+
+@app.post("/api/sessions/{thread_id}/constraints", status_code=201)
+async def add_constraint(thread_id: str, body: AddConstraintRequest):
+    """向指定会话添加一条禁令。"""
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content cannot be empty")
+    now = _now_iso()
+    async with aiosqlite.connect(_SESSIONS_DB) as db:
+        cur = await db.execute(
+            "INSERT INTO constraints (thread_id, content, enabled, created_at) VALUES (?,?,1,?)",
+            (thread_id, content, now),
+        )
+        await db.commit()
+        new_id = cur.lastrowid
+    return {"id": new_id, "thread_id": thread_id, "content": content, "enabled": 1, "created_at": now}
+
+
+@app.patch("/api/sessions/{thread_id}/constraints/{constraint_id}")
+async def toggle_constraint(thread_id: str, constraint_id: int, body: PatchConstraintRequest):
+    """启用/禁用指定禁令。"""
+    async with aiosqlite.connect(_SESSIONS_DB) as db:
+        await db.execute(
+            "UPDATE constraints SET enabled = ? WHERE id = ? AND thread_id = ?",
+            (1 if body.enabled else 0, constraint_id, thread_id),
+        )
+        await db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/sessions/{thread_id}/constraints/{constraint_id}")
+async def delete_constraint(thread_id: str, constraint_id: int):
+    """删除指定禁令。"""
+    async with aiosqlite.connect(_SESSIONS_DB) as db:
+        await db.execute(
+            "DELETE FROM constraints WHERE id = ? AND thread_id = ?",
+            (constraint_id, thread_id),
+        )
+        await db.commit()
+    return {"ok": True}
+
+
+async def _load_enabled_constraints(thread_id: str) -> list[str]:
+    """加载指定会话中启用的禁令列表。"""
+    async with aiosqlite.connect(_SESSIONS_DB) as db:
+        async with db.execute(
+            "SELECT content FROM constraints WHERE thread_id = ? AND enabled = 1 ORDER BY id",
+            (thread_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [row[0] for row in rows]
+
+
 
 @app.get("/api/chat/stream")
 async def chat_stream(query: str, thread_id: str, session_id: str):
@@ -301,8 +441,25 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
     hook = _make_sql_confirm_hook(session_id, loop, queue)
     sql_confirm.register_web_hook(session_id, hook)
 
+    # 注册 SQL 步骤事件 hook（复杂/数据分析技能每步 SQL 执行后触发）
+    def _sql_step_hook(step_id: str, label: str, sql: str) -> None:
+        asyncio.run_coroutine_threadsafe(
+            queue.put(json.dumps({
+                "type": "sql_step",
+                "step_id": step_id,
+                "label": label,
+                "sql": sql,
+            })),
+            loop,
+        )
+    sql_step_emitter.register_hook(session_id, _sql_step_hook)
+
     config_with_thread = {"configurable": {"thread_id": thread_id}}
-    state = {"messages": [HumanMessage(content=query)]}
+    constraints_list = await _load_enabled_constraints(thread_id)
+    state = {
+        "messages": [HumanMessage(content=query)],
+        "constraints": constraints_list,
+    }
 
     def _extract_text(output) -> str:
         """从各种 LangChain/LangGraph 输出结构中提取文本内容。"""
@@ -334,6 +491,7 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
         _ANSWER_NODES = {"format_answer", "general_chat"}
         try:
             sql_confirm.set_web_session(session_id)
+            sql_step_emitter.set_session(session_id)
 
             async for event in _web_graph.astream_events(state, config=config_with_thread, version="v2"):
                 kind = event.get("event", "")
@@ -418,6 +576,7 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
             task.cancel()
         finally:
             sql_confirm.unregister_web_hook(session_id)
+            sql_step_emitter.unregister_hook(session_id)
             _session_queues.pop(session_id, None)
             _confirm_events.pop(session_id, None)
             # 刷新会话的 updated_at，使其在列表中排到最前

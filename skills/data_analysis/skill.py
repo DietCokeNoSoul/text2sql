@@ -124,6 +124,8 @@ class DataAnalysisSkill(BaseSkill):
             export_files: list  # paths to exported CSV/Excel files
             report: str
             task_id: str        # session plan tracking
+            constraints: list   # user-defined hard constraints
+            thread_id: str      # conversation thread id (injected by _make_skill_node)
         
         graph = StateGraph(DataAnalysisState)
         
@@ -174,7 +176,7 @@ class DataAnalysisSkill(BaseSkill):
         if not user_question and messages:
             user_question = messages[0].content
         
-        thread_id = (config or {}).get("configurable", {}).get("thread_id", "")
+        thread_id = state.get("thread_id", "") or (config or {}).get("configurable", {}).get("thread_id", "")
         
         system_prompt = """[Role & Policies]
 你是一个数据分析专家，负责理解用户的分析目标并提取结构化需求。
@@ -203,7 +205,7 @@ class DataAnalysisSkill(BaseSkill):
 }
 
 只返回 JSON 对象，不要任何其他内容。
-"""
+""" + self._build_constraints_block(state.get("constraints", []))
         
         analysis_messages = [
             SystemMessage(content=system_prompt),
@@ -364,7 +366,7 @@ class DataAnalysisSkill(BaseSkill):
     "visualization_suggestions": ["...", "..."]
 }}
 
-只返回 JSON 对象，不要任何其他内容。
+只返回 JSON 对象，不要任何其他内容。{self._build_constraints_block(state.get("constraints", []))}
 """
         
         plan_messages = [
@@ -446,7 +448,7 @@ class DataAnalysisSkill(BaseSkill):
 （无）
 
 [Output]
-只输出 SQL 查询语句，不加 Markdown、不加解释。
+只输出 SQL 查询语句，不加 Markdown、不加解释。{self._build_constraints_block(state.get("constraints", []))}
 """
             
             query_messages = [
@@ -466,7 +468,23 @@ class DataAnalysisSkill(BaseSkill):
             # Remove leading "sql" if present
             if sql_query.lower().startswith("sql\n"):
                 sql_query = sql_query[4:].strip()
-            
+
+            # ── 用户禁令守卫 ──────────────────────────────────────────────────
+            from agent.constraint_guard import check_constraints, build_block_message
+            from agent.sql_errors import UserPolicyError
+            try:
+                check_constraints(sql_query, state.get("constraints", []))
+            except UserPolicyError as ce:
+                logger.warning("[DataAnalysis] Blocked by constraint: %r", ce.matched_keyword)
+                sql_queries.append({
+                    "step_id": step_id,
+                    "description": description,
+                    "query": None,
+                    "blocked": True,
+                    "block_message": build_block_message(ce),
+                })
+                continue
+
             sql_queries.append({
                 "step_id": step_id,
                 "description": description,
@@ -479,6 +497,18 @@ class DataAnalysisSkill(BaseSkill):
             content=f"Generated {len(sql_queries)} SQL queries for analysis."
         )
         self._step_done(state, 4, f"{len(sql_queries)} queries generated")
+
+        # ── Session plan: add per-SQL sub-steps for granular tracking ─────
+        task_id = state.get("task_id", "")
+        if self._plan_manager and task_id:
+            for sq in sql_queries:
+                if not sq.get("blocked"):
+                    self._plan_manager.add_step(task_id, {
+                        "step_id": 40 + sq["step_id"],
+                        "description": f"SQL-{sq['step_id']}: {sq['description']}",
+                        "query": sq.get("query", ""),
+                        "status": "pending",
+                    })
         
         return {
             "messages": [new_message],
@@ -562,6 +592,17 @@ class DataAnalysisSkill(BaseSkill):
             description = query_data.get("description")
             sql = query_data.get("query")
 
+            # 被禁令拦截的步骤：跳过执行，记录拦截结果
+            if query_data.get("blocked"):
+                query_results.append({
+                    "step_id": step_id,
+                    "description": description,
+                    "success": False,
+                    "result": query_data.get("block_message", "该步骤已被禁令拦截"),
+                    "error": "blocked_by_constraint",
+                })
+                continue
+
             # ── SQL 执行前用户确认 ────────────────────────────────────────────
             if self.confirm_enabled and sql:
                 from agent.sql_confirm import prompt_sql_confirmation, build_skip_message
@@ -603,6 +644,19 @@ class DataAnalysisSkill(BaseSkill):
                     "success": True,
                     "retries": exec_result["retries"],
                 })
+
+                # ── Emit SQL step event for live frontend ─────────────────
+                from agent import sql_step_emitter
+                sql_step_emitter.emit(str(step_id), description, exec_result["final_sql"])
+
+                # ── Session plan: mark sub-step done ──────────────────────
+                task_id = state.get("task_id", "")
+                if self._plan_manager and task_id:
+                    self._plan_manager.update_step(
+                        task_id, 40 + step_id, "done",
+                        sql=exec_result["final_sql"],
+                        result_summary=str(result)[:200],
+                    )
 
                 # Generate insight from result
                 insight_prompt = f"""[Role & Policies]
@@ -649,9 +703,17 @@ class DataAnalysisSkill(BaseSkill):
             content=f"Executed {len(query_results)} queries, extracted {len(insights)} insights."
         )
         self._step_done(state, 5, f"{len(insights)} insights from {len(query_results)} queries")
+
+        # Add SQL step messages for history reconstruction
+        sql_msgs = [new_message]
+        for qr in query_results:
+            if qr.get("success") and qr.get("query"):
+                sql_msgs.append(AIMessage(
+                    content=f"__sql__:{qr['step_id']}:{qr['description']}:{qr['query']}"
+                ))
         
         return {
-            "messages": [new_message],
+            "messages": sql_msgs,
             "query_results": query_results,
             "insights": insights
         }
