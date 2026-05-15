@@ -430,8 +430,15 @@ async def _load_enabled_constraints(thread_id: str) -> list[str]:
 @app.get("/api/chat/stream")
 async def chat_stream(query: str, thread_id: str, session_id: str):
     """SSE 流式端点：执行查询并以 SSE 事件推送节点更新和 token。"""
+
     if _web_graph is None:
         raise HTTPException(status_code=503, detail="Graph not initialized")
+
+    # Prompt 注入防御
+    from agent.prompt_guard import PromptGuard
+    guard_result = PromptGuard.check_input(query)
+    if guard_result.flagged:
+        raise HTTPException(status_code=400, detail=f"输入不合法：{guard_result.category} {guard_result.reason}")
 
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue[str | None] = asyncio.Queue()

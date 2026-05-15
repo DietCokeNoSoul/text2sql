@@ -136,13 +136,13 @@ class ComplexQuerySkill(BaseSkill):
         return graph.compile()
     
     def _get_user_question(self, state: Dict[str, Any]) -> str:
-        """Extract the first HumanMessage content from state."""
+        """Extract the most recent HumanMessage content from state."""
         from langchain_core.messages import HumanMessage as HM
-        for msg in state.get("messages", []):
+        messages = state.get("messages", [])
+        for msg in reversed(messages):
             if isinstance(msg, HM):
                 return msg.content
-        msgs = state.get("messages", [])
-        return msgs[0].content if msgs else ""
+        return messages[0].content if messages else ""
 
     def _dual_tower_retrieve_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """双塔检索节点：用 Milvus + Steiner Tree 剪枝 schema。"""

@@ -29,6 +29,7 @@ import json
 import logging
 import re
 import time
+import ast
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -133,37 +134,163 @@ class SQLSecurityGuard:
         return ValidationResult(passed=True, rewritten_sql=sql)
 
     def sanitize_result(self, result: str, sql: str) -> str:
-        """Layer 4：检查查询是否涉及敏感列，并在日志中标记警告。
+        """Layer 4：对敏感列执行真实值脱敏。
 
-        当前策略为「警告式脱敏」：
-        - 检测 SQL 中是否查询了敏感列（按正则匹配列名）。
-        - 若检测到，在日志中输出警告，并在返回结果末尾追加脱敏提示行。
-        - 不对结果内容做破坏性字符替换（避免损坏合法数据）。
-
-        如需更严格的脱敏策略（如直接替换值），可在子类中覆写本方法。
-
-        参数:
-            result: 数据库返回的原始结果字符串。
-            sql: 执行的 SQL 语句（用于提取列名）。
-
-        返回:
-            处理后的结果字符串。
+        策略:
+        - 从 SQL AST 识别敏感列（含别名）对应的 SELECT 列下标。
+        - 用 ast.literal_eval 安全解析 SQLDatabase.run() 返回的 Python 字面量。
+        - 对命中下标的结果值替换为 mask_value。
+        - 若遇到 SELECT * 或解析失败，降级为警告追加模式。
         """
         sensitive_cols = self._extract_sensitive_columns(sql)
-        if not sensitive_cols:
-            return result
+        indices = self._get_sensitive_column_indices(sql, sensitive_cols)
+
+        if not indices:
+            if self._has_select_star(sql):
+                notice = (
+                    "\n[SecurityGuard] Warning: SELECT * detected; "
+                    "unable to apply precise masking. Handle result with care."
+                )
+                return result + notice
+            if not sensitive_cols:
+                return result
 
         for col in sensitive_cols:
             logger.warning(
-                f"[SecurityGuard] ⚠️ Sensitive column queried: '{col}' — "
+                f"[SecurityGuard] Sensitive column queried: '{col}' - "
                 "review result before exposing to end users."
             )
 
-        notice = (
-            f"\n[SecurityGuard] ⚠️ Warning: result contains sensitive "
-            f"column(s): {sensitive_cols}. Handle with care."
-        )
-        return result + notice
+        if not indices:
+            notice = (
+                f"\n[SecurityGuard] Warning: result contains sensitive "
+                f"column(s): {sensitive_cols}. Handle with care."
+            )
+            return result + notice
+
+        try:
+            rows = ast.literal_eval(result)
+        except Exception as e:
+            logger.warning(
+                f"[SecurityGuard] Result parse failed for redaction ({e}), "
+                "falling back to warning-only mode."
+            )
+            notice = (
+                f"\n[SecurityGuard] Warning: result contains sensitive "
+                f"column(s): {sensitive_cols}. Handle with care."
+            )
+            return result + notice
+
+        redacted = self._redact_result(rows, indices)
+        if redacted is None:
+            notice = (
+                f"\n[SecurityGuard] Warning: result contains sensitive "
+                f"column(s): {sensitive_cols}. Handle with care."
+            )
+            return result + notice
+
+        return redacted
+
+    def _has_select_star(self, sql: str) -> bool:
+        """判断 SQL 是否包含 SELECT *，用于脱敏降级策略。"""
+        try:
+            parsed = sqlglot.parse(sql, dialect=self.dialect or None)
+        except Exception:
+            return False
+
+        for stmt in parsed:
+            if stmt is None:
+                continue
+            select_stmt: Optional[exp.Select]
+            if isinstance(stmt, exp.Select):
+                select_stmt = stmt
+            else:
+                select_stmt = stmt.find(exp.Select)
+            if select_stmt is None:
+                continue
+            for expression in select_stmt.expressions:
+                if isinstance(expression, exp.Star):
+                    return True
+        return False
+
+    def _get_sensitive_column_indices(self, sql: str, sensitive_cols: List[str]) -> List[int]:
+        """返回 SELECT 结果中需要脱敏的列下标。"""
+        sensitive_set = {c.lower() for c in sensitive_cols}
+
+        try:
+            parsed = sqlglot.parse(sql, dialect=self.dialect or None)
+        except Exception as e:
+            logger.warning(f"[SecurityGuard] Failed to parse SQL for redaction indices: {e}")
+            return []
+
+        select_stmt: Optional[exp.Select] = None
+        for stmt in parsed:
+            if stmt is None:
+                continue
+            if isinstance(stmt, exp.Select):
+                select_stmt = stmt
+                break
+            found = stmt.find(exp.Select)
+            if found is not None:
+                select_stmt = found
+                break
+
+        if select_stmt is None:
+            return []
+
+        indices: List[int] = []
+        for idx, expression in enumerate(select_stmt.expressions):
+            if isinstance(expression, exp.Star):
+                return []
+
+            alias_name = ""
+            col_name = ""
+            target = expression
+
+            if isinstance(expression, exp.Alias):
+                alias_name = expression.alias_or_name or ""
+                target = expression.this
+
+            if isinstance(target, exp.Column):
+                col_name = target.name or ""
+            else:
+                col_node = target.find(exp.Column)
+                if col_node is not None:
+                    col_name = col_node.name or ""
+
+            alias_hit = bool(alias_name) and (
+                alias_name.lower() in sensitive_set or self.is_sensitive_column(alias_name)
+            )
+            col_hit = bool(col_name) and (
+                col_name.lower() in sensitive_set or self.is_sensitive_column(col_name)
+            )
+
+            if alias_hit or col_hit:
+                indices.append(idx)
+
+        return indices
+
+    def _redact_result(self, rows: Any, indices: List[int]) -> Optional[str]:
+        """按列下标脱敏结果并重新序列化。"""
+        if not isinstance(rows, list):
+            return None
+
+        redacted_rows: List[Any] = []
+        for row in rows:
+            if not isinstance(row, (tuple, list)):
+                return None
+
+            mutable = list(row)
+            for idx in indices:
+                if 0 <= idx < len(mutable):
+                    mutable[idx] = self.config.mask_value
+
+            if isinstance(row, tuple):
+                redacted_rows.append(tuple(mutable))
+            else:
+                redacted_rows.append(mutable)
+
+        return repr(redacted_rows)
 
     def is_sensitive_column(self, col_name: str) -> bool:
         """判断列名是否匹配任一敏感模式。"""

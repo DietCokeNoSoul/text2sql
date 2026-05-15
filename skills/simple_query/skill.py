@@ -118,6 +118,15 @@ class SimpleQuerySkill(BaseSkill):
         builder.add_edge("fix_query", "execute_query")
         
         return builder.compile()
+
+    @staticmethod
+    def _latest_human_message(messages: List[Any]) -> str:
+        """返回最近一条用户消息内容。"""
+        for msg in reversed(messages or []):
+            role = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else None)
+            if role == "human":
+                return str(msg.content if hasattr(msg, "content") else msg.get("content", ""))
+        return ""
     
     # ========== 特有节点实现 ==========
     
@@ -179,11 +188,7 @@ class SimpleQuerySkill(BaseSkill):
             # ── Session plan: create plan for this query ──────────────────
             thread_id = state.get("thread_id", "") or (config or {}).get("configurable", {}).get("thread_id", "")
             messages_list = state.get("messages", [])
-            user_question = ""
-            for msg in reversed(messages_list):
-                if hasattr(msg, "type") and msg.type == "human":
-                    user_question = msg.content
-                    break
+            user_question = self._latest_human_message(messages_list)
             task_id = ""
             if self._plan_manager:
                 task_id = self._plan_manager.new_task_id()
@@ -568,12 +573,7 @@ Schema: tb_shop (id, name, score, area)
                 return {"validation_feedback": ""}
 
             # 提取用户原始问题
-            user_question = ""
-            for msg in messages:
-                role = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else None)
-                if role == "human":
-                    user_question = str(msg.content if hasattr(msg, "content") else msg.get("content", ""))
-                    break
+            user_question = self._latest_human_message(messages)
 
             validation_prompt = f"""请判断以下 SQL 查询结果是否正确回答了用户的问题。
 

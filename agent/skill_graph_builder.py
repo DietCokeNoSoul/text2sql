@@ -16,6 +16,7 @@ Memory System:
 """
 
 import logging
+import asyncio
 from typing import Any, Dict, Callable
 
 from langchain_core.language_models import BaseChatModel
@@ -32,6 +33,36 @@ from agent.skills.registry import SkillRegistry
 # Note: Skills are imported lazily in __init__ to avoid circular imports
 
 logger = logging.getLogger(__name__)
+
+
+def _is_llm_timeout_error(exc: Exception) -> bool:
+    """Best-effort timeout detection across requests/urllib3/asyncio stacks."""
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return True
+
+    try:
+        import requests  # type: ignore
+        if isinstance(exc, (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.Timeout)):
+            return True
+    except Exception:
+        pass
+
+    try:
+        import urllib3  # type: ignore
+        if isinstance(exc, urllib3.exceptions.ConnectTimeoutError):
+            return True
+    except Exception:
+        pass
+
+    msg = str(exc).lower()
+    timeout_markers = (
+        "connect timeout",
+        "connection timed out",
+        "read timeout",
+        "timed out",
+        "max retries exceeded",
+    )
+    return any(marker in msg for marker in timeout_markers)
 
 # L1 classifier prompt — includes conversation context for follow-up awareness
 _INTENT_SYSTEM_PROMPT = """[Role & Policies]
@@ -451,12 +482,24 @@ class SkillBasedGraphBuilder:
             # Nothing to format
             return {}
 
+        # Prompt 注入防御：用结构化边界包裹 SQL 结果
+        from agent.prompt_guard import PromptGuard
+        safe_result_text = PromptGuard.wrap_db_result(result_text, question=user_question)
+
         format_messages = [
             SystemMessage(content=_FORMAT_ANSWER_SYSTEM_PROMPT + constraints_block),
-            HumanMessage(content=f"用户问题：{user_question}\n\nSQL 查询结果：\n{result_text}"),
+            HumanMessage(content=f"用户问题：{user_question}\n\nSQL 查询结果：\n{safe_result_text}"),
         ]
-        response = await self.llm.ainvoke(format_messages)
-        return {"messages": [response]}
+        try:
+            response = await self.llm.ainvoke(format_messages)
+            return {"messages": [response]}
+        except Exception as e:
+            if _is_llm_timeout_error(e):
+                logger.warning(
+                    f"[Format Answer] LLM timeout, returning raw SQL result fallback: {e}"
+                )
+                return {"messages": [AIMessage(content=safe_result_text)]}
+            raise
 
     # ── L2: Skill routing ─────────────────────────────────────────────────────
 

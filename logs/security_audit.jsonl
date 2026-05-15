@@ -1,0 +1,18 @@
+{"timestamp": 1778843410.5241938, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT SUM(cnt) AS total_rows FROM (SELECT COUNT(*) AS cnt FROM tb_blog UNION ALL SELECT COUNT(*) AS cnt FROM tb_blog_comments UNION ALL SELECT COUNT(*) AS cnt FROM tb_follow UNION ALL SELECT COUNT(*)..."}
+{"timestamp": 1778843416.4173996, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS total_vouchers FROM tb_voucher LIMIT 1000"}
+{"timestamp": 1778843496.3765883, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS total_users FROM tb_user LIMIT 1000"}
+{"timestamp": 1778843500.6384327, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS total_coupons FROM tb_coupon LIMIT 1000"}
+{"timestamp": 1778843502.6326497, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS total_coupons FROM tb_coupons LIMIT 1000"}
+{"timestamp": 1778843505.0084362, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS total_coupons FROM tb_coupon LIMIT 1000"}
+{"timestamp": 1778848860.2862868, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS table_count FROM information_schema.TABLES WHERE table_schema = SCHEMA() LIMIT 1000"}
+{"timestamp": 1778848867.7601004, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 'Hello, welcome!' AS greeting LIMIT 1000"}
+{"timestamp": 1778848932.1678803, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS table_count FROM information_schema.TABLES WHERE TABLE_SCHEMA = SCHEMA() LIMIT 1000"}
+{"timestamp": 1778848938.758668, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 'Hello' AS greeting LIMIT 1000"}
+{"timestamp": 1778849038.2644389, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS voucher_count FROM tb_voucher LIMIT 1000"}
+{"timestamp": 1778849041.493078, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS voucher_count FROM tb_voucher LIMIT 1000"}
+{"timestamp": 1778849042.0528045, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS voucher_count FROM tb_voucher LIMIT 1000"}
+{"timestamp": 1778849374.7746124, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS voucher_count FROM tb_voucher LIMIT 1000"}
+{"timestamp": 1778850109.420985, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id AS password FROM tb_user LIMIT 3"}
+{"timestamp": 1778850215.0648816, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id AS password FROM tb_user LIMIT 3"}
+{"timestamp": 1778850358.2077346, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT password FROM tb_user ORDER BY id LIMIT 1;"}
+{"timestamp": 1778851182.2899187, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT password FROM tb_user ORDER BY id ASC LIMIT 1"}

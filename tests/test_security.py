@@ -237,30 +237,59 @@ class TestLayer3Complexity(unittest.TestCase):
 # ===========================================================================
 
 class TestLayer4Sanitize(unittest.TestCase):
-    """Layer 4: 敏感列检测与结果标记。"""
+    """Layer 4: 敏感列真实脱敏。"""
 
     def test_no_sensitive_col_returns_unchanged(self):
         guard = _make_guard()
         result = guard.sanitize_result("[('alice', 25)]", "SELECT name, age FROM users")
         self.assertEqual(result, "[('alice', 25)]")
 
-    def test_sensitive_col_appends_warning(self):
+    def test_sensitive_col_is_masked(self):
         guard = _make_guard()
         result = guard.sanitize_result(
             "[('alice', 'hash123')]",
             "SELECT name, password FROM users"
         )
-        self.assertIn("SecurityGuard", result)
-        self.assertIn("password", result)
+        self.assertIn("***", result)
+        self.assertNotIn("hash123", result)
 
-    def test_multiple_sensitive_cols_all_reported(self):
+    def test_multiple_sensitive_cols_all_masked(self):
         guard = _make_guard()
         result = guard.sanitize_result(
             "[('tok', 'key')]",
             "SELECT token, api_key FROM credentials"
         )
-        # 警告信息应包含敏感列名
+        self.assertNotIn("tok", result)
+        self.assertNotIn("key", result)
+        self.assertIn("***", result)
+
+    def test_sensitive_alias_is_masked(self):
+        guard = _make_guard()
+        result = guard.sanitize_result(
+            "[('hash123',)]",
+            "SELECT password AS pw FROM users"
+        )
+        self.assertIn("***", result)
+        self.assertNotIn("hash123", result)
+
+    def test_alias_only_sensitive_name_is_masked(self):
+        guard = _make_guard()
+        result = guard.sanitize_result(
+            "[(6,), (5,)]",
+            "SELECT id AS password FROM users"
+        )
+        self.assertIn("***", result)
+        self.assertNotIn("(6,)", result)
+        self.assertNotIn("(5,)", result)
+
+    def test_select_star_falls_back_to_warning_mode(self):
+        guard = _make_guard()
+        result = guard.sanitize_result(
+            "[('alice', 'hash123')]",
+            "SELECT * FROM users"
+        )
         self.assertIn("SecurityGuard", result)
+        self.assertIn("hash123", result)
 
     def test_is_sensitive_column_password(self):
         guard = _make_guard()
@@ -410,6 +439,7 @@ class TestSecurityConfigFromEnv(unittest.TestCase):
         self.assertEqual(cfg.max_rows, 1000)
         self.assertIsNone(cfg.table_allowlist)
         self.assertEqual(cfg.table_denylist, [])
+        self.assertEqual(cfg.audit_log_file, "security_audit.jsonl")
 
     def test_from_env_max_rows(self):
         self._set_env(SECURITY_MAX_ROWS="200")
@@ -444,6 +474,19 @@ class TestSecurityConfigFromEnv(unittest.TestCase):
             self.assertFalse(cfg.enable_audit_log)
         finally:
             self._clear_env("SECURITY_AUDIT_LOG")
+
+    def test_from_env_audit_log_file_default(self):
+        self._clear_env("SECURITY_AUDIT_LOG_FILE")
+        cfg = SecurityConfig.from_env()
+        self.assertEqual(cfg.audit_log_file, "security_audit.jsonl")
+
+    def test_from_env_audit_log_file_empty_disables_file(self):
+        self._set_env(SECURITY_AUDIT_LOG_FILE="")
+        try:
+            cfg = SecurityConfig.from_env()
+            self.assertIsNone(cfg.audit_log_file)
+        finally:
+            self._clear_env("SECURITY_AUDIT_LOG_FILE")
 
 
 # ===========================================================================

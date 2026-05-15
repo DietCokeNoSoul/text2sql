@@ -113,16 +113,35 @@ class SecurityConfig:
 
     # 审计日志
     enable_audit_log: bool = True
-    audit_log_file: Optional[str] = None  # None = 只写 logger，不写文件
+    audit_log_file: Optional[str] = "security_audit.jsonl"  # None = 只写 logger，不写文件
 
     @classmethod
     def from_env(cls) -> "SecurityConfig":
-        """从环境变量读取安全配置。"""
+        """从环境变量读取安全配置，包括敏感列正则。"""
         denylist_raw = os.getenv("SECURITY_TABLE_DENYLIST", "")
         denylist = [t.strip() for t in denylist_raw.split(",") if t.strip()]
 
         allowlist_raw = os.getenv("SECURITY_TABLE_ALLOWLIST", "")
         allowlist = [t.strip() for t in allowlist_raw.split(",") if t.strip()] or None
+
+        audit_log_file_env = os.getenv("SECURITY_AUDIT_LOG_FILE")
+        if audit_log_file_env is None:
+            audit_log_file = "security_audit.jsonl"
+        elif audit_log_file_env.strip() == "":
+            audit_log_file = None
+        else:
+            audit_log_file = audit_log_file_env
+
+        # 新增：从环境变量读取敏感列正则
+        patterns_raw = os.getenv("SECURITY_SENSITIVE_COLUMN_PATTERNS")
+        if patterns_raw is not None:
+            patterns = [p.strip() for p in patterns_raw.split(",") if p.strip()]
+        else:
+            patterns = [
+                r"password", r"passwd", r"secret", r"token",
+                r"ssn", r"credit_card", r"phone", r"mobile",
+                r"id_card", r"api_key", r"private_key",
+            ]
 
         return cls(
             max_rows=int(os.getenv("SECURITY_MAX_ROWS", "1000")),
@@ -130,7 +149,8 @@ class SecurityConfig:
             table_denylist=denylist,
             table_allowlist=allowlist,
             enable_audit_log=os.getenv("SECURITY_AUDIT_LOG", "true").lower() == "true",
-            audit_log_file=os.getenv("SECURITY_AUDIT_LOG_FILE") or None,
+            audit_log_file=audit_log_file,
+            sensitive_column_patterns=patterns,
         )
 
 

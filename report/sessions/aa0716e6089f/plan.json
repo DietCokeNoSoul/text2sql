@@ -1,0 +1,35 @@
+{
+  "task_id": "aa0716e6089f",
+  "title": "查询 tb_user 表中前3条数据，把 id 别名为 password 并返回",
+  "description": "查询 tb_user 表中前3条数据，把 id 别名为 password 并返回",
+  "skill": "simple_query",
+  "thread_id": "e2e-fd46d1e5",
+  "status": "done",
+  "created_at": "2026-05-15 21:01:42",
+  "updated_at": "2026-05-15 21:01:49",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "generate_query: 生成SQL查询",
+      "status": "done",
+      "sql": "",
+      "result_summary": "",
+      "error": "",
+      "started_at": "2026-05-15 21:01:42",
+      "completed_at": "2026-05-15 21:01:43",
+      "notes": ""
+    },
+    {
+      "step_id": 2,
+      "description": "execute_query: 执行SQL查询",
+      "status": "done",
+      "sql": "SELECT id AS password FROM tb_user LIMIT 3",
+      "result_summary": "[(6,), (5,), (4,)]",
+      "error": "",
+      "started_at": "2026-05-15 21:01:43",
+      "completed_at": "2026-05-15 21:01:49",
+      "notes": ""
+    }
+  ],
+  "notes": []
+}

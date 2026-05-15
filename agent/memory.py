@@ -7,10 +7,10 @@
                            Milvus 不可用时自动降级到 SQLite + numpy
 
 记忆卡片策略:
-  - 原始消息 → 过滤 → 分轮次 → 超出窗口的旧轮次 → LLM 摘要 → 卡片
-  - 卡片绝不二次摘要（防止信息叠加损耗）
-  - 检索时: embed(当前问题) → cosine 相似度 → top-k 卡片
-  - 上下文组装: [相关卡片摘要] + [近 WINDOW_TURNS 轮完整] + [当前问题]
+    - 原始消息 → 过滤 → 分轮次 → 超出窗口的旧轮次 → LLM 摘要 → 卡片
+    - 卡片绝不二次摘要（防止信息叠加损耗）
+    - 检索时: embed(当前问题) → cosine 相似度 → top-k 卡片
+    - 上下文组装: [相关卡片摘要] + [近 WINDOW_TURNS 轮完整] + [当前问题]
 """
 
 from __future__ import annotations
@@ -338,21 +338,6 @@ class ConversationMemoryManager:
                 total += self._estimate_tokens(t.ai)
         return total
 
-    # ── 稀疏化保留：确保第一轮始终锚定在窗口 ────────────────────────────────
-
-    @staticmethod
-    def _anchor_first_turn(
-        window: List[ConversationTurn],
-        complete_turns: List[ConversationTurn],
-    ) -> List[ConversationTurn]:
-        """若 T1 不在当前窗口内，将其插入到窗口最前端（Anchor 策略）。"""
-        if not complete_turns or not window:
-            return window
-        anchor = complete_turns[0]
-        if anchor is window[0]:
-            return window
-        return [anchor] + window
-
     # ── 去重压缩：在 format_history_messages 中跳过语义重复的旧轮次 ──────────
 
     def _dedup_window_indices(
@@ -509,9 +494,6 @@ class ConversationMemoryManager:
                     f"[Memory] Token-overflow card saved (turns {card.turn_start}~{card.turn_end}), "
                     f"window now {len(window)} turns"
                 )
-
-        # ── 稀疏化保留：将 T1 固定在窗口最前端 ───────────────────────────────
-        window = self._anchor_first_turn(window, complete_turns)
 
         # ── 检索相关记忆卡片 ──────────────────────────────────────────────────
         relevant_cards: List[MemoryCard] = []

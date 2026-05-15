@@ -151,6 +151,15 @@ class DataAnalysisSkill(BaseSkill):
         graph.add_edge("export_results", END)
         
         return graph.compile()
+
+    @staticmethod
+    def _latest_human_message(messages: List[Any]) -> str:
+        """返回最近一条用户消息内容。"""
+        for msg in reversed(messages or []):
+            role = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else None)
+            if role == "human":
+                return str(msg.content if hasattr(msg, "content") else msg.get("content", ""))
+        return ""
     
     # ============ Node 1: Understand Goal ============
     
@@ -167,14 +176,7 @@ class DataAnalysisSkill(BaseSkill):
         logger.info("[DataAnalysis] Understanding analysis goal")
 
         messages = state.get("messages", [])
-        # Use the latest HumanMessage for multi-turn conversation support
-        user_question = ""
-        for msg in reversed(messages):
-            if hasattr(msg, "type") and msg.type == "human":
-                user_question = msg.content
-                break
-        if not user_question and messages:
-            user_question = messages[0].content
+        user_question = self._latest_human_message(messages)
         
         thread_id = state.get("thread_id", "") or (config or {}).get("configurable", {}).get("thread_id", "")
         
