@@ -228,9 +228,63 @@ class SkillBasedGraphBuilder:
         # Initialize Skills
         logger.info("Initializing Skills...")
         confirm_enabled = config.sql_confirm_enabled
-        simple_skill = SimpleQuerySkill(llm, tool_manager, db_manager, confirm_enabled=confirm_enabled)
-        complex_skill = ComplexQuerySkill(llm, tool_manager, db_manager, retriever=self._retriever, plan_manager=self._plan_manager, confirm_enabled=confirm_enabled)
-        analysis_skill = DataAnalysisSkill(llm, tool_manager, db_manager, config=config, plan_manager=self._plan_manager, confirm_enabled=confirm_enabled)
+        simple_skill = SimpleQuerySkill(
+            llm,
+            tool_manager,
+            db_manager,
+            confirm_enabled=confirm_enabled,
+            sql_correction_max_retries=config.sql_correction_max_retries,
+            sql_perf_enabled=config.sql_perf.enabled,
+            sql_perf_rows_threshold=config.sql_perf.rows_warning_threshold,
+            sql_perf_optimize_enabled=config.sql_perf.optimize_enabled,
+            sql_perf_max_rewrite_rounds=config.sql_perf.max_rewrite_rounds,
+            sql_perf_min_improvement=config.sql_perf.min_score_improvement,
+            sql_perf_optimize_threshold=config.sql_perf.optimize_score_threshold,
+            sql_perf_semantic_validation_enabled=config.sql_perf.semantic_validation_enabled,
+            sql_perf_semantic_sample_rows=config.sql_perf.semantic_sample_rows,
+            sql_perf_optimize_trigger_low_score=config.sql_perf.optimize_trigger_low_score,
+            sql_perf_optimize_trigger_large_rows=config.sql_perf.optimize_trigger_large_rows,
+            sql_perf_optimize_trigger_full_scan=config.sql_perf.optimize_trigger_full_scan,
+            sql_perf_optimize_trigger_filesort=config.sql_perf.optimize_trigger_filesort,
+            sql_perf_optimize_trigger_temporary=config.sql_perf.optimize_trigger_temporary,
+            sql_perf_optimize_trigger_high_cost=config.sql_perf.optimize_trigger_high_cost,
+            sql_perf_optimize_min_triggers=config.sql_perf.optimize_min_triggers,
+            sql_perf_cost_warning_threshold=config.sql_perf.cost_warning_threshold,
+        )
+        complex_skill = ComplexQuerySkill(
+            llm,
+            tool_manager,
+            db_manager,
+            retriever=self._retriever,
+            plan_manager=self._plan_manager,
+            confirm_enabled=confirm_enabled,
+            sql_correction_max_retries=config.sql_correction_max_retries,
+            sql_perf_enabled=config.sql_perf.enabled,
+            sql_perf_rows_threshold=config.sql_perf.rows_warning_threshold,
+            sql_perf_optimize_enabled=config.sql_perf.optimize_enabled,
+            sql_perf_max_rewrite_rounds=config.sql_perf.max_rewrite_rounds,
+            sql_perf_min_improvement=config.sql_perf.min_score_improvement,
+            sql_perf_optimize_threshold=config.sql_perf.optimize_score_threshold,
+            sql_perf_semantic_validation_enabled=config.sql_perf.semantic_validation_enabled,
+            sql_perf_semantic_sample_rows=config.sql_perf.semantic_sample_rows,
+            sql_perf_optimize_trigger_low_score=config.sql_perf.optimize_trigger_low_score,
+            sql_perf_optimize_trigger_large_rows=config.sql_perf.optimize_trigger_large_rows,
+            sql_perf_optimize_trigger_full_scan=config.sql_perf.optimize_trigger_full_scan,
+            sql_perf_optimize_trigger_filesort=config.sql_perf.optimize_trigger_filesort,
+            sql_perf_optimize_trigger_temporary=config.sql_perf.optimize_trigger_temporary,
+            sql_perf_optimize_trigger_high_cost=config.sql_perf.optimize_trigger_high_cost,
+            sql_perf_optimize_min_triggers=config.sql_perf.optimize_min_triggers,
+            sql_perf_cost_warning_threshold=config.sql_perf.cost_warning_threshold,
+        )
+        analysis_skill = DataAnalysisSkill(
+            llm,
+            tool_manager,
+            db_manager,
+            config=config,
+            plan_manager=self._plan_manager,
+            confirm_enabled=confirm_enabled,
+            sql_correction_max_retries=config.sql_correction_max_retries,
+        )
         
         # Register all skills — descriptions loaded from SKILL.md automatically
         self.registry = SkillRegistry()

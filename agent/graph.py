@@ -77,19 +77,46 @@ if config.llm.api_key:
     else:
         os.environ[f"{config.llm.provider.upper()}_API_KEY"] = config.llm.api_key
 
+
+def _apply_dashscope_env(cfg: Any) -> None:
+    """Apply optional DashScope runtime env overrides from config."""
+    if cfg.provider != "tongyi":
+        return
+    if cfg.dashscope_http_base_url:
+        os.environ["DASHSCOPE_HTTP_BASE_URL"] = cfg.dashscope_http_base_url
+    if cfg.dashscope_websocket_base_url:
+        os.environ["DASHSCOPE_WEBSOCKET_BASE_URL"] = cfg.dashscope_websocket_base_url
+    if cfg.dashscope_api_region:
+        os.environ["DASHSCOPE_API_REGION"] = cfg.dashscope_api_region
+    if cfg.dashscope_api_version:
+        os.environ["DASHSCOPE_API_VERSION"] = cfg.dashscope_api_version
+
+    # Follow official DashScope usage: set SDK global base URLs directly.
+    try:
+        import dashscope
+
+        if cfg.dashscope_http_base_url:
+            dashscope.base_http_api_url = cfg.dashscope_http_base_url
+        if cfg.dashscope_websocket_base_url:
+            dashscope.base_websocket_api_url = cfg.dashscope_websocket_base_url
+    except Exception as e:
+        logger.warning("Failed to apply dashscope global base urls: %s", e)
+
 # 初始化语言模型
 def _create_llm(cfg):
     """统一 LLM 初始化入口，按 provider 选择正确的后端。"""
     if cfg.provider == "tongyi":
-        from langchain_community.chat_models import ChatTongyi
-        kwargs = dict(
+        from agent.dashscope_adapter import DashScopeChatModel
+
+        return DashScopeChatModel(
             model=cfg.model,
             temperature=cfg.temperature,
-            dashscope_api_key=cfg.api_key,
+            top_p=cfg.top_p,
+            max_retries=cfg.client_max_retries,
+            request_timeout=cfg.dashscope_request_timeout,
+            api_key=cfg.api_key,
+            base_http_api_url=cfg.dashscope_http_base_url,
         )
-        if cfg.max_tokens is not None:
-            kwargs["max_tokens"] = cfg.max_tokens
-        return ChatTongyi(**kwargs)
     extra = {"max_tokens": cfg.max_tokens} if cfg.max_tokens is not None else {}
     return init_chat_model(
         f"{cfg.provider}:{cfg.model}",
@@ -99,6 +126,7 @@ def _create_llm(cfg):
 
 
 try:
+    _apply_dashscope_env(config.llm)
     _base_llm = _create_llm(config.llm)
     # B5: 自动重试 — 网络抖动时最多重试 3 次，指数退避 + jitter
     llm = _base_llm.with_retry(stop_after_attempt=3, wait_exponential_jitter=True)

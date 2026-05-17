@@ -98,7 +98,7 @@ export async function confirmSql(sessionId, action, reason = '') {
  *   onNodeEnd(node)
  *   onToken(content)
  *   onFullResponse(content)
- *   onSqlStep(stepId, label, sql)   — fired for each SQL step executed
+ *   onSqlStep(stepId, label, sql, performance, optimization)   — fired for each SQL step executed
  *   onSqlConfirm(sql, sessionId) → Promise<{action, reason}>
  *   onDone()
  *   onError(message)
@@ -137,7 +137,7 @@ export function streamQuery(query, threadId, sessionId, callbacks) {
         break
       }
       case 'sql_step':
-        callbacks.onSqlStep?.(data.step_id, data.label, data.sql)
+        callbacks.onSqlStep?.(data.step_id, data.label, data.sql, data.performance, data.optimization)
         break
       case 'done':
         callbacks.onDone?.()

@@ -29,7 +29,8 @@ from agent.config import AgentConfig, OutputConfig
 from agent.tools import SQLToolManager
 from agent.database import SQLDatabaseManager
 from agent.skills.base import BaseSkill
-from agent.sql_correction import execute_with_correction
+from agent.sql_execution_pipeline import run_sql_execution_pipeline
+from agent.sql_performance import SQLPerformanceAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -86,14 +87,37 @@ class DataAnalysisSkill(BaseSkill):
         config: Optional[AgentConfig] = None,
         plan_manager: Optional[object] = None,  # SessionPlanManager instance
         confirm_enabled: bool = False,
+        sql_correction_max_retries: int = 2,
     ):
         self.db_manager = db_manager
         self._output_config: OutputConfig = config.output if config else OutputConfig()
         self._report_summary_threshold: int = (
             config.memory.report_summary_threshold if config else 800
         )
+        sql_perf_cfg = config.sql_perf if config else None
+        self._perf_analyzer = SQLPerformanceAnalyzer(
+            db_manager=db_manager,
+            llm=llm,
+            enabled=(sql_perf_cfg.enabled if sql_perf_cfg else True),
+            optimize_enabled=(sql_perf_cfg.optimize_enabled if sql_perf_cfg else False),
+            rows_warning_threshold=(sql_perf_cfg.rows_warning_threshold if sql_perf_cfg else 10000),
+            min_score_improvement=(sql_perf_cfg.min_score_improvement if sql_perf_cfg else 8),
+            max_rewrite_rounds=(sql_perf_cfg.max_rewrite_rounds if sql_perf_cfg else 1),
+            optimize_score_threshold=(sql_perf_cfg.optimize_score_threshold if sql_perf_cfg else 70),
+            semantic_validation_enabled=(sql_perf_cfg.semantic_validation_enabled if sql_perf_cfg else True),
+            semantic_sample_rows=(sql_perf_cfg.semantic_sample_rows if sql_perf_cfg else 20),
+            optimize_trigger_low_score=(sql_perf_cfg.optimize_trigger_low_score if sql_perf_cfg else True),
+            optimize_trigger_large_rows=(sql_perf_cfg.optimize_trigger_large_rows if sql_perf_cfg else True),
+            optimize_trigger_full_scan=(sql_perf_cfg.optimize_trigger_full_scan if sql_perf_cfg else True),
+            optimize_trigger_filesort=(sql_perf_cfg.optimize_trigger_filesort if sql_perf_cfg else True),
+            optimize_trigger_temporary=(sql_perf_cfg.optimize_trigger_temporary if sql_perf_cfg else True),
+            optimize_trigger_high_cost=(sql_perf_cfg.optimize_trigger_high_cost if sql_perf_cfg else False),
+            optimize_min_triggers=(sql_perf_cfg.optimize_min_triggers if sql_perf_cfg else 1),
+            cost_warning_threshold=(sql_perf_cfg.cost_warning_threshold if sql_perf_cfg else 1000.0),
+        )
         self._plan_manager = plan_manager
         self.confirm_enabled = confirm_enabled
+        self._correction_max_retries = max(0, int(sql_correction_max_retries))
         
         _md = Path(__file__).parent / "SKILL.md"
         super().__init__(
@@ -605,7 +629,17 @@ class DataAnalysisSkill(BaseSkill):
                 })
                 continue
 
-            # ── SQL 执行前用户确认 ────────────────────────────────────────────
+            perf_opt_result = self._perf_analyzer.optimize_sql(
+                sql,
+                constraints=state.get("constraints", []),
+            )
+            sql = perf_opt_result.final_sql
+            perf_analysis = perf_opt_result.final_analysis
+            logger.info("[DataAnalysis][SQLPerf][step=%s][before] %s", step_id, perf_opt_result.original_analysis.summary)
+            logger.info("[DataAnalysis][SQLPerf][step=%s][after] %s", step_id, perf_analysis.summary)
+            if perf_opt_result.optimized:
+                logger.info("[DataAnalysis][SQLPerf][step=%s] SQL optimized and replaced", step_id)
+
             if self.confirm_enabled and sql:
                 from agent.sql_confirm import prompt_sql_confirmation, build_skip_message
                 action, reason = prompt_sql_confirmation(sql)
@@ -621,43 +655,64 @@ class DataAnalysisSkill(BaseSkill):
                         "success": False,
                         "skipped": True,
                         "retries": 0,
+                        "performance": perf_analysis.to_dict(),
+                        "performance_optimization": perf_opt_result.to_dict(),
                     })
                     insights.append({"step_id": step_id, "insight": "SQL已被用户跳过"})
                     continue
 
-            # Execute with automatic SQL error correction (up to 2 retries)
-            exec_result = execute_with_correction(
+            pipeline_result = run_sql_execution_pipeline(
                 sql=sql,
                 query_tool=query_tool,
                 db_manager=self.db_manager,
                 llm=self.llm,
-                max_retries=2,
+                perf_analyzer=self._perf_analyzer,
+                constraints=state.get("constraints", []),
                 context_label=f"[DataAnalysis] step {step_id}",
+                correction_max_retries=self._correction_max_retries,
+                precomputed_optimization=perf_opt_result,
             )
+            logger.info("[DataAnalysis][Pipeline][step=%s] decision=%s", step_id, pipeline_result.decision)
 
-            if exec_result["success"]:
-                result = exec_result["result"]
+            if pipeline_result.success:
+                result = pipeline_result.result
                 query_results.append({
                     "step_id": step_id,
                     "description": description,
-                    "query": exec_result["final_sql"],
+                    "query": pipeline_result.final_sql,
                     "original_query": sql,
                     "result": result,
                     "success": True,
-                    "retries": exec_result["retries"],
+                    "retries": pipeline_result.retries,
+                    "correction_trace": pipeline_result.correction_trace,
+                    "pipeline_decision": pipeline_result.decision,
+                    "performance": perf_analysis.to_dict(),
+                    "performance_optimization": perf_opt_result.to_dict(),
                 })
 
                 # ── Emit SQL step event for live frontend ─────────────────
                 from agent import sql_step_emitter
-                sql_step_emitter.emit(str(step_id), description, exec_result["final_sql"])
+                sql_step_emitter.emit(
+                    str(step_id),
+                    description,
+                    pipeline_result.final_sql,
+                    performance=perf_analysis.to_dict(),
+                    optimization=perf_opt_result.to_dict(),
+                )
 
                 # ── Session plan: mark sub-step done ──────────────────────
                 task_id = state.get("task_id", "")
                 if self._plan_manager and task_id:
                     self._plan_manager.update_step(
                         task_id, 40 + step_id, "done",
-                        sql=exec_result["final_sql"],
+                        sql=pipeline_result.final_sql,
                         result_summary=str(result)[:200],
+                        notes=(
+                            perf_analysis.summary + (
+                                f" | 优化: {perf_opt_result.original_analysis.score}->{perf_analysis.score}"
+                                if perf_opt_result.optimized else ""
+                            )
+                        )[:200],
                     )
 
                 # Generate insight from result
@@ -688,17 +743,21 @@ class DataAnalysisSkill(BaseSkill):
                     "step_id": step_id,
                     "insight": insight_response.content,
                 })
-                logger.info(f"[DataAnalysis] Analyzed step {step_id} (retries={exec_result['retries']})")
+                logger.info(f"[DataAnalysis] Analyzed step {step_id} (retries={pipeline_result.retries})")
             else:
-                logger.error(f"[DataAnalysis] Query failed for step {step_id} after correction: {exec_result['error']}")
+                error_str = pipeline_result.error
+                logger.error(f"[DataAnalysis] Query failed for step {step_id} after correction: {error_str}")
                 query_results.append({
                     "step_id": step_id,
                     "description": description,
-                    "query": exec_result["final_sql"],
-                    "original_query": sql,
-                    "error": exec_result["error"],
+                    "query": pipeline_result.final_sql,
+                    "error": error_str,
                     "success": False,
-                    "retries": exec_result["retries"],
+                    "retries": pipeline_result.retries,
+                    "correction_trace": pipeline_result.correction_trace,
+                    "pipeline_decision": pipeline_result.decision,
+                    "performance": perf_analysis.to_dict(),
+                    "performance_optimization": perf_opt_result.to_dict(),
                 })
         
         new_message = AIMessage(

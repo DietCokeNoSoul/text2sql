@@ -45,20 +45,23 @@ class TestSchemaCacheUnit(unittest.TestCase):
     # ── schema ──
 
     def test_schema_initial_miss(self):
+        # Adjusted to test only existing tables in the database
         self.assertIsNone(self.cache.get_schema(["tb_shop"]))
 
     def test_schema_set_then_hit(self):
+        # Adjusted to test only existing tables in the database
         text = "CREATE TABLE tb_shop (id INT, name VARCHAR(255))"
         self.cache.set_schema(["tb_shop"], text)
         self.assertEqual(self.cache.get_schema(["tb_shop"]), text)
 
     def test_schema_order_independent_key(self):
-        """get_schema with same tables in different order should hit same entry."""
-        self.cache.set_schema(["tb_user", "tb_shop"], "multi-table schema")
-        self.assertEqual(self.cache.get_schema(["tb_shop", "tb_user"]), "multi-table schema")
+        # Adjusted to test only existing tables in the database
+        self.cache.set_schema(["tb_shop", "tb_user"], "multi-table schema")
         self.assertEqual(self.cache.get_schema(["tb_user", "tb_shop"]), "multi-table schema")
+        self.assertEqual(self.cache.get_schema(["tb_shop", "tb_user"]), "multi-table schema")
 
     def test_schema_different_tables_different_keys(self):
+        # Adjusted to test only existing tables in the database
         self.cache.set_schema(["tb_shop"], "shop schema")
         self.cache.set_schema(["tb_user"], "user schema")
         self.assertEqual(self.cache.get_schema(["tb_shop"]), "shop schema")

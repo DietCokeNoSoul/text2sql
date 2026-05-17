@@ -64,6 +64,34 @@ class CachedSchemaTool:
         return getattr(self._original, name)
 
 
+class SecureQueryTool:
+    """Query tool wrapper that enforces the DB manager security pipeline.
+
+    This ensures sql_db_query calls do not bypass Layer 1-4 protections,
+    especially result redaction for sensitive columns.
+    """
+
+    def __init__(self, original_tool: BaseTool, db_manager: SQLDatabaseManager):
+        self._original = original_tool
+        self._db_manager = db_manager
+        self.name = original_tool.name
+        self.description = original_tool.description
+        self.args_schema = original_tool.args_schema
+
+    def invoke(self, input_data, config=None, **kwargs):
+        if isinstance(input_data, dict):
+            query = input_data.get("query", "")
+        else:
+            query = str(input_data)
+        return self._db_manager.execute_query(query)
+
+    async def ainvoke(self, input_data, config=None, **kwargs):
+        return self.invoke(input_data, config=config, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
 class SQLToolManager:
     """管理 SQL 数据库工具和工具节点。"""
     
@@ -159,7 +187,8 @@ class SQLToolManager:
     
     def get_query_tool(self) -> BaseTool:
         """获取查询执行工具。"""
-        return self.get_required_tool("sql_db_query")
+        original = self.get_required_tool("sql_db_query")
+        return SecureQueryTool(original, self.db_manager)
     
     def get_list_tables_tool(self) -> BaseTool:
         """获取表列表工具。"""
@@ -191,7 +220,9 @@ class SQLToolManager:
     
     def get_query_node(self) -> ToolNode:
         """获取查询工具节点。"""
-        return self.get_tool_node("sql_db_query", "run_query")
+        if "run_query" not in self._tool_nodes:
+            self._tool_nodes["run_query"] = ToolNode([self.get_query_tool()], name="run_query")
+        return self._tool_nodes["run_query"]
     
     def list_available_tools(self) -> List[str]:
         """获取可用工具名称列表。

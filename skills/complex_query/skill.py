@@ -24,7 +24,8 @@ from agent.tools import SQLToolManager
 from agent.database import SQLDatabaseManager
 from agent.skills.base import BaseSkill
 from agent.skills.states import ComplexQueryState
-from agent.sql_correction import execute_with_correction
+from agent.sql_execution_pipeline import run_sql_execution_pipeline
+from agent.sql_performance import SQLPerformanceAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +51,49 @@ class ComplexQuerySkill(BaseSkill):
         retriever: Optional[object] = None,   # DualTowerRetriever instance
         plan_manager: Optional[object] = None, # SessionPlanManager instance
         confirm_enabled: bool = False,
+        sql_correction_max_retries: int = 2,
+        sql_perf_enabled: bool = True,
+        sql_perf_rows_threshold: int = 10000,
+        sql_perf_optimize_enabled: bool = False,
+        sql_perf_max_rewrite_rounds: int = 1,
+        sql_perf_min_improvement: int = 8,
+        sql_perf_optimize_threshold: int = 70,
+        sql_perf_semantic_validation_enabled: bool = True,
+        sql_perf_semantic_sample_rows: int = 20,
+        sql_perf_optimize_trigger_low_score: bool = True,
+        sql_perf_optimize_trigger_large_rows: bool = True,
+        sql_perf_optimize_trigger_full_scan: bool = True,
+        sql_perf_optimize_trigger_filesort: bool = True,
+        sql_perf_optimize_trigger_temporary: bool = True,
+        sql_perf_optimize_trigger_high_cost: bool = False,
+        sql_perf_optimize_min_triggers: int = 1,
+        sql_perf_cost_warning_threshold: float = 1000.0,
     ):
         self.db_manager = db_manager
         self._retriever = retriever
         self._plan_manager = plan_manager
         self.confirm_enabled = confirm_enabled
+        self._correction_max_retries = max(0, int(sql_correction_max_retries))
+        self._perf_analyzer = SQLPerformanceAnalyzer(
+            db_manager=db_manager,
+            llm=llm,
+            enabled=sql_perf_enabled,
+            optimize_enabled=sql_perf_optimize_enabled,
+            rows_warning_threshold=sql_perf_rows_threshold,
+            min_score_improvement=sql_perf_min_improvement,
+            max_rewrite_rounds=sql_perf_max_rewrite_rounds,
+            optimize_score_threshold=sql_perf_optimize_threshold,
+            semantic_validation_enabled=sql_perf_semantic_validation_enabled,
+            semantic_sample_rows=sql_perf_semantic_sample_rows,
+            optimize_trigger_low_score=sql_perf_optimize_trigger_low_score,
+            optimize_trigger_large_rows=sql_perf_optimize_trigger_large_rows,
+            optimize_trigger_full_scan=sql_perf_optimize_trigger_full_scan,
+            optimize_trigger_filesort=sql_perf_optimize_trigger_filesort,
+            optimize_trigger_temporary=sql_perf_optimize_trigger_temporary,
+            optimize_trigger_high_cost=sql_perf_optimize_trigger_high_cost,
+            optimize_min_triggers=sql_perf_optimize_min_triggers,
+            cost_warning_threshold=sql_perf_cost_warning_threshold,
+        )
         self.simple_query_tool = None  # Will be set by main graph if needed
         
         _md = Path(__file__).parent / "SKILL.md"
@@ -374,6 +413,16 @@ class ComplexQuerySkill(BaseSkill):
             
             # Replace placeholders with actual results from dependencies
             query = self._resolve_query_placeholders(query, step.get("depends_on", []), step_results)
+            perf_opt_result = self._perf_analyzer.optimize_sql(
+                query,
+                constraints=state.get("constraints", []),
+            )
+            query = perf_opt_result.final_sql
+            perf_analysis = perf_opt_result.final_analysis
+            logger.info("[ComplexQuery][SQLPerf][step=%s][before] %s", step_id, perf_opt_result.original_analysis.summary)
+            logger.info("[ComplexQuery][SQLPerf][step=%s][after] %s", step_id, perf_analysis.summary)
+            if perf_opt_result.optimized:
+                logger.info("[ComplexQuery][SQLPerf][step=%s] SQL optimized and replaced", step_id)
             
             # ── SQL 执行前用户确认 ────────────────────────────────────────────
             if self.confirm_enabled and query:
@@ -392,70 +441,95 @@ class ComplexQuerySkill(BaseSkill):
                         "success": False,
                         "skipped": True,
                         "retries": 0,
+                        "performance": perf_analysis.to_dict(),
+                        "performance_optimization": perf_opt_result.to_dict(),
                     }
                     if self._plan_manager and task_id:
                         self._plan_manager.update_step(task_id, step_id, "skipped")
                     continue
 
-            # Execute query with automatic error correction (up to 2 retries)
-            query_tool = self.tool_manager.get_query_tool()
-            exec_result = execute_with_correction(
+            # ── 统一执行管线：直执失败后自动走纠错 ───────────────────────────
+            pipeline_result = run_sql_execution_pipeline(
                 sql=query,
-                query_tool=query_tool,
+                query_tool=self.tool_manager.get_query_tool(),
                 db_manager=self.db_manager,
                 llm=self.llm,
-                max_retries=2,
+                perf_analyzer=self._perf_analyzer,
+                constraints=state.get("constraints", []),
                 context_label=f"[ComplexQuery] step {step_id}",
+                correction_max_retries=self._correction_max_retries,
+                precomputed_optimization=perf_opt_result,
             )
+            logger.info("[ComplexQuery][Pipeline][step=%s] decision=%s", step_id, pipeline_result.decision)
 
-            if exec_result["success"]:
-                result = exec_result["result"]
+            if pipeline_result.success:
+                result = pipeline_result.result
                 step_results[step_id] = {
                     "step_id": step_id,
                     "description": step["description"],
-                    "query": exec_result["final_sql"],
+                    "query": pipeline_result.final_sql,
                     "original_query": step["query"],
                     "result": result,
                     "success": True,
-                    "retries": exec_result["retries"],
+                    "retries": pipeline_result.retries,
+                    "correction_trace": pipeline_result.correction_trace,
+                    "pipeline_decision": pipeline_result.decision,
+                    "performance": perf_analysis.to_dict(),
+                    "performance_optimization": perf_opt_result.to_dict(),
                 }
-                logger.info(f"[ComplexQuery] Step {step_id} executed successfully (retries={exec_result['retries']})")
+                logger.info(f"[ComplexQuery] Step {step_id} executed successfully (retries={pipeline_result.retries})")
 
                 # ── Emit SQL step event for live frontend ─────────────────
                 from agent import sql_step_emitter
-                sql_step_emitter.emit(str(step_id), step["description"], exec_result["final_sql"])
+                sql_step_emitter.emit(
+                    str(step_id),
+                    step["description"],
+                    pipeline_result.final_sql,
+                    performance=perf_analysis.to_dict(),
+                    optimization=perf_opt_result.to_dict(),
+                )
 
                 # ── Session plan: mark step done ──────────────────────────
                 if self._plan_manager and task_id:
                     result_preview = str(result)[:200] if result else ""
                     self._plan_manager.update_step(
                         task_id, step_id, "done",
-                        sql=exec_result["final_sql"],
+                        sql=pipeline_result.final_sql,
                         result_summary=result_preview,
+                        notes=(
+                            perf_analysis.summary + (
+                                f" | 优化: {perf_opt_result.original_analysis.score}->{perf_analysis.score}"
+                                if perf_opt_result.optimized else ""
+                            )
+                        )[:200],
                     )
             else:
-                error_str = exec_result["error"]
+                error_str = pipeline_result.error
                 logger.error(f"[ComplexQuery] Step {step_id} failed after correction: {error_str}")
                 step_results[step_id] = {
                     "step_id": step_id,
                     "description": step["description"],
-                    "query": exec_result["final_sql"],
+                    "query": pipeline_result.final_sql,
                     "original_query": step["query"],
-                    "error": error_str,
+                    "result": f"Error: {error_str}",
                     "success": False,
-                    "retries": exec_result["retries"],
+                    "retries": pipeline_result.retries,
+                    "correction_trace": pipeline_result.correction_trace,
+                    "pipeline_decision": pipeline_result.decision,
+                    "performance": perf_analysis.to_dict(),
+                    "performance_optimization": perf_opt_result.to_dict(),
                 }
                 # ── Session plan: mark step failed ────────────────────────
                 if self._plan_manager and task_id:
                     self._plan_manager.update_step(
                         task_id, step_id, "failed",
-                        sql=exec_result["final_sql"],
+                        sql=pipeline_result.final_sql,
                         error=error_str,
                     )
                     self._plan_manager.add_note(
                         task_id, "blocker",
                         f"Step {step_id} 执行失败（纠错后仍失败）",
-                        f"SQL: {exec_result['final_sql'][:150]}\n错误: {error_str[:150]}",
+                        f"SQL: {pipeline_result.final_sql[:150]}\n错误: {error_str[:150]}",
                     )
         
         # Add SQL step messages for history reconstruction

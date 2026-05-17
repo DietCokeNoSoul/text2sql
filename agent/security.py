@@ -31,7 +31,7 @@ import re
 import time
 import ast
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -89,9 +89,15 @@ class SQLSecurityGuard:
         "REPLACE": "REPLACE",
     }
 
-    def __init__(self, config: SecurityConfig, dialect: str = "") -> None:
+    def __init__(
+        self,
+        config: SecurityConfig,
+        dialect: str = "",
+        column_map_provider: Optional[Callable[[], Dict[str, List[str]]]] = None,
+    ) -> None:
         self.config = config
         self.dialect = dialect
+        self._column_map_provider = column_map_provider
         self._audit_records: List[Dict[str, Any]] = []
         self._sensitive_re: List[re.Pattern] = [
             re.compile(p, re.IGNORECASE)
@@ -138,9 +144,10 @@ class SQLSecurityGuard:
 
         策略:
         - 从 SQL AST 识别敏感列（含别名）对应的 SELECT 列下标。
+        - 对 SELECT * / table.* 尝试基于数据库列顺序展开后再精确脱敏。
         - 用 ast.literal_eval 安全解析 SQLDatabase.run() 返回的 Python 字面量。
         - 对命中下标的结果值替换为 mask_value。
-        - 若遇到 SELECT * 或解析失败，降级为警告追加模式。
+        - 若列顺序无法可靠推断或结果解析失败，降级为警告追加模式。
         """
         sensitive_cols = self._extract_sensitive_columns(sql)
         indices = self._get_sensitive_column_indices(sql, sensitive_cols)
@@ -211,37 +218,87 @@ class SQLSecurityGuard:
             for expression in select_stmt.expressions:
                 if isinstance(expression, exp.Star):
                     return True
+                if isinstance(expression, exp.Column) and isinstance(expression.this, exp.Star):
+                    return True
         return False
 
-    def _get_sensitive_column_indices(self, sql: str, sensitive_cols: List[str]) -> List[int]:
-        """返回 SELECT 结果中需要脱敏的列下标。"""
-        sensitive_set = {c.lower() for c in sensitive_cols}
-
+    def _parse_select_statement(self, sql: str) -> Optional[exp.Select]:
         try:
             parsed = sqlglot.parse(sql, dialect=self.dialect or None)
         except Exception as e:
             logger.warning(f"[SecurityGuard] Failed to parse SQL for redaction indices: {e}")
-            return []
+            return None
 
-        select_stmt: Optional[exp.Select] = None
         for stmt in parsed:
             if stmt is None:
                 continue
             if isinstance(stmt, exp.Select):
-                select_stmt = stmt
-                break
+                return stmt
             found = stmt.find(exp.Select)
             if found is not None:
-                select_stmt = found
-                break
+                return found
+        return None
 
+    def _get_column_map(self) -> Dict[str, List[str]]:
+        if self._column_map_provider is None:
+            return {}
+        try:
+            return self._column_map_provider() or {}
+        except Exception as e:
+            logger.warning(f"[SecurityGuard] Failed to load column map: {e}")
+            return {}
+
+    def _get_table_alias_map(self, select_stmt: exp.Select) -> Dict[str, str]:
+        alias_map: Dict[str, str] = {}
+        for table in select_stmt.find_all(exp.Table):
+            table_name = table.name or ""
+            alias_name = table.alias_or_name or table_name
+            if table_name:
+                alias_map[alias_name.lower()] = table_name
+                alias_map[table_name.lower()] = table_name
+        return alias_map
+
+    def _expand_star_expression(
+        self,
+        expression: exp.Expression,
+        alias_map: Dict[str, str],
+        column_map: Dict[str, List[str]],
+    ) -> Optional[List[str]]:
+        if isinstance(expression, exp.Star):
+            table_names = list(dict.fromkeys(alias_map.values()))
+            if len(table_names) != 1:
+                return None
+            return list(column_map.get(table_names[0], [])) or None
+
+        if isinstance(expression, exp.Column) and isinstance(expression.this, exp.Star):
+            table_ref = (expression.table or "").lower()
+            table_name = alias_map.get(table_ref, table_ref)
+            return list(column_map.get(table_name, [])) or None
+
+        return []
+
+    def _get_sensitive_column_indices(self, sql: str, sensitive_cols: List[str]) -> List[int]:
+        """返回 SELECT 结果中需要脱敏的列下标。"""
+        sensitive_set = {c.lower() for c in sensitive_cols}
+        select_stmt = self._parse_select_statement(sql)
         if select_stmt is None:
             return []
 
+        alias_map = self._get_table_alias_map(select_stmt)
+        column_map = self._get_column_map()
+
         indices: List[int] = []
-        for idx, expression in enumerate(select_stmt.expressions):
-            if isinstance(expression, exp.Star):
+        output_idx = 0
+        for expression in select_stmt.expressions:
+            expanded = self._expand_star_expression(expression, alias_map, column_map)
+            if expanded is None:
                 return []
+            if expanded:
+                for col_name in expanded:
+                    if col_name.lower() in sensitive_set or self.is_sensitive_column(col_name):
+                        indices.append(output_idx)
+                    output_idx += 1
+                continue
 
             alias_name = ""
             col_name = ""
@@ -266,7 +323,9 @@ class SQLSecurityGuard:
             )
 
             if alias_hit or col_hit:
-                indices.append(idx)
+                indices.append(output_idx)
+
+            output_idx += 1
 
         return indices
 
@@ -477,14 +536,43 @@ class SQLSecurityGuard:
         """从 SQL AST 中找出被查询的敏感列名。"""
         sensitive: List[str] = []
         try:
-            parsed = sqlglot.parse(sql, dialect=self.dialect or None)
-            for stmt in parsed:
-                if stmt is None:
+            select_stmt = self._parse_select_statement(sql)
+            if select_stmt is None:
+                return []
+
+            alias_map = self._get_table_alias_map(select_stmt)
+            column_map = self._get_column_map()
+
+            for expression in select_stmt.expressions:
+                expanded = self._expand_star_expression(expression, alias_map, column_map)
+                if expanded is None:
                     continue
-                for col_node in stmt.find_all(exp.Column):
-                    col_name = col_node.name or ""
-                    if col_name and self.is_sensitive_column(col_name):
-                        sensitive.append(col_name)
+                if expanded:
+                    for col_name in expanded:
+                        if col_name and self.is_sensitive_column(col_name):
+                            sensitive.append(col_name)
+                    continue
+
+                alias_name = ""
+                col_name = ""
+                target = expression
+
+                if isinstance(expression, exp.Alias):
+                    alias_name = expression.alias_or_name or ""
+                    target = expression.this
+
+                if alias_name and self.is_sensitive_column(alias_name):
+                    sensitive.append(alias_name)
+
+                if isinstance(target, exp.Column):
+                    col_name = target.name or ""
+                else:
+                    col_node = target.find(exp.Column)
+                    if col_node is not None:
+                        col_name = col_node.name or ""
+
+                if col_name and self.is_sensitive_column(col_name):
+                    sensitive.append(col_name)
         except Exception:
             pass
         return list(dict.fromkeys(sensitive))  # 保序去重

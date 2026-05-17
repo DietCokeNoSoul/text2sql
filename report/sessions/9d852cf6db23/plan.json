@@ -1,0 +1,35 @@
+{
+  "task_id": "9d852cf6db23",
+  "title": "他的密码是多少？",
+  "description": "他的密码是多少？",
+  "skill": "simple_query",
+  "thread_id": "a62f7f79-0b5a-4404-a064-84ee8ecb15eb",
+  "status": "done",
+  "created_at": "2026-05-17 18:03:17",
+  "updated_at": "2026-05-17 18:03:20",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "generate_query: 生成SQL查询",
+      "status": "done",
+      "sql": "",
+      "result_summary": "",
+      "error": "",
+      "started_at": "2026-05-17 18:03:17",
+      "completed_at": "2026-05-17 18:03:19",
+      "notes": ""
+    },
+    {
+      "step_id": 2,
+      "description": "execute_query: 执行SQL查询",
+      "status": "done",
+      "sql": "SELECT password FROM tb_user WHERE id = 1",
+      "result_summary": "[('***',)]",
+      "error": "",
+      "started_at": "2026-05-17 18:03:19",
+      "completed_at": "2026-05-17 18:03:20",
+      "notes": "性能评分=80/100，未命中索引，无明显全表扫描，预计扫描行数未知，预计代价=1.00"
+    }
+  ],
+  "notes": []
+}

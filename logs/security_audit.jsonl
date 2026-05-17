@@ -16,3 +16,107 @@
 {"timestamp": 1778850215.0648816, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id AS password FROM tb_user LIMIT 3"}
 {"timestamp": 1778850358.2077346, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT password FROM tb_user ORDER BY id LIMIT 1;"}
 {"timestamp": 1778851182.2899187, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT password FROM tb_user ORDER BY id ASC LIMIT 1"}
+{"timestamp": 1779010150.0862813, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010150.0883632, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010150.980145, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010151.7160718, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010151.7409077, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010151.7429085, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010151.7488325, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010151.753631, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010151.7711015, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010151.7730997, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010151.7776916, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010151.796494, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010151.8192139, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010151.8212442, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010151.828176, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010151.8337855, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010235.508891, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010235.5110416, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010235.5170343, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010235.5229511, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010235.544202, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010235.546245, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010235.5525188, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010235.5574853, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010235.5763597, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010235.5783658, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010235.5846465, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010235.5896664, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010235.6079066, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010235.6099014, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010235.6149263, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010235.6201427, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010293.2023022, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010293.2043915, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010293.2100391, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010293.2166154, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010293.2482793, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010293.2517889, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010293.2583, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010293.2646859, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010293.285401, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010293.2869194, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010293.2936587, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010293.2996714, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010293.3196404, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010293.3225303, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010293.328789, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010293.3360388, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010302.628118, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010302.6302707, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010302.6372833, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010302.6427958, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010302.6648853, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010302.6683946, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010302.676119, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010302.6823976, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010302.702715, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010302.7048604, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010302.711011, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010302.717059, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010302.7385843, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010302.739584, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010302.7451138, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010302.7512028, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010341.1698678, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010341.1728723, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010341.1788716, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010341.1845357, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010341.2067988, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010341.2097938, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010341.2177603, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010341.2236478, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010341.2428765, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010341.2448766, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010341.2500918, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010341.2564232, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779010341.2780287, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010341.2810812, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779010341.2871, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'QUERY', only ['SELECT'] are permitted.", "sql_preview": "Query was empty"}
+{"timestamp": 1779010341.2938461, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779011712.2378855, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779011712.240346, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779011712.8313441, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM your_table_name LIMIT 1000"}
+{"timestamp": 1779011713.7060685, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM tb_blog LIMIT 1000;"}
+{"timestamp": 1779011713.726023, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779011713.7290134, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779011713.7357793, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM your_table_name LIMIT 1000"}
+{"timestamp": 1779011713.751654, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM tb_blog LIMIT 1000;"}
+{"timestamp": 1779011713.7750587, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779011713.7770586, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779011713.7860885, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM your_table_name LIMIT 1000"}
+{"timestamp": 1779011713.7976396, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM tb_blog LIMIT 1000;"}
+{"timestamp": 1779011713.817008, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779011713.819511, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": ""}
+{"timestamp": 1779011713.8250384, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM your_table_name LIMIT 1000"}
+{"timestamp": 1779011713.8358397, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM tb_blog LIMIT 1000;"}
+{"timestamp": 1779012177.4288619, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS table_count FROM information_schema.TABLES WHERE TABLE_SCHEMA = SCHEMA() LIMIT 1000"}
+{"timestamp": 1779012190.3582773, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT nick_name FROM tb_user ORDER BY id ASC LIMIT 1"}
+{"timestamp": 1779012200.1688094, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT password FROM tb_user WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779012315.5344906, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) FROM tb_shop LIMIT 1000"}
+{"timestamp": 1779012361.5137067, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) FROM tb_shop LIMIT 1000"}
+{"timestamp": 1779012364.4359355, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) FROM tb_shop LIMIT 1000"}
+{"timestamp": 1779012365.0999346, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) FROM tb_shop LIMIT 1000"}
+{"timestamp": 1779012440.46057, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT name FROM tb_shop ORDER BY id LIMIT 1"}

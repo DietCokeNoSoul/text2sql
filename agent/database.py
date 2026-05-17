@@ -359,6 +359,7 @@ class SQLDatabaseManager:
                 self._guard = SQLSecurityGuard(
                     config=self._security_config,
                     dialect=self._dialect.value,
+                    column_map_provider=self.get_column_map,
                 )
                 logger.info(
                     f"[SecurityGuard] Initialized with dialect={self._dialect.value}, "

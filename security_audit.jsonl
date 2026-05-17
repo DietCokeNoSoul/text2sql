@@ -1,0 +1,235 @@
+{"timestamp": 1779003269.569959, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'INTO OUTFILE'", "sql_preview": "SELECT * FROM t INTO OUTFILE '/tmp/x'"}
+{"timestamp": 1779003269.5731769, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'LOAD', only ['SELECT'] are permitted.", "sql_preview": "LOAD DATA INFILE '/etc/passwd' INTO TABLE t"}
+{"timestamp": 1779003269.5753489, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'xp_cmdshell'", "sql_preview": "SELECT xp_cmdshell('whoami')"}
+{"timestamp": 1779003269.577477, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779003269.5807858, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'CREATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "CREATE TABLE evil (x INT)"}
+{"timestamp": 1779003269.5834568, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "INSERT INTO logs (msg) VALUES ('ok')"}
+{"timestamp": 1779003269.585065, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM users WHERE id=1"}
+{"timestamp": 1779003269.5876827, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE users"}
+{"timestamp": 1779003269.590063, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'INSERT' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "INSERT INTO users (name) VALUES ('hack')"}
+{"timestamp": 1779003269.5926707, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003269.5963118, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM (SELECT id FROM t) AS sub LIMIT 1000"}
+{"timestamp": 1779003269.5990117, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id, name FROM users WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779003269.601151, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'TRUNCATETABLE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "TRUNCATE TABLE logs"}
+{"timestamp": 1779003269.6032631, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'UPDATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "UPDATE users SET name='x' WHERE id=1"}
+{"timestamp": 1779003269.6058996, "action": "BLOCKED", "layer": "Layer2_TableAllowlist", "reason": "Table 'users' is not in the allowlist: ['products']", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779003269.6094503, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM any_table LIMIT 1000"}
+{"timestamp": 1779003269.6121082, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}
+{"timestamp": 1779003269.6145773, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779003269.617407, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'secrets' is denied.", "sql_preview": "SELECT a.id FROM accounts a JOIN secrets s ON a.id=s.id"}
+{"timestamp": 1779003269.6200454, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'USERS' is denied.", "sql_preview": "SELECT * FROM USERS"}
+{"timestamp": 1779003269.6227007, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM orders LIMIT 1000"}
+{"timestamp": 1779003269.6252427, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779003269.6286144, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779003269.630715, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 50"}
+{"timestamp": 1779003269.6328971, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779003269.6377175, "action": "BLOCKED", "layer": "Layer3_QueryLength", "reason": "Query length 315 exceeds maximum 50 characters.", "sql_preview": "SELECT a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a..."}
+{"timestamp": 1779003269.6415942, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779003269.6436744, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT name FROM tb_shop LIMIT 10"}
+{"timestamp": 1779003269.662592, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779003269.666246, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003269.6694791, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM t LIMIT 5"}
+{"timestamp": 1779003269.6716037, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003269.680233, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779003269.6822329, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003269.6847434, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003269.6857443, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779003269.6867447, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779003269.6892576, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779003269.6922565, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003269.6957676, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003269.6957676, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM t"}
+{"timestamp": 1779003269.6977692, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779003269.7182548, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM products"}
+{"timestamp": 1779003269.7237666, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'products' is denied.", "sql_preview": "SELECT * FROM products"}
+{"timestamp": 1779003269.7302663, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE products"}
+{"timestamp": 1779003269.7396185, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1"}
+{"timestamp": 1779003269.7478004, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}
+{"timestamp": 1779003586.7541015, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'INTO OUTFILE'", "sql_preview": "SELECT * FROM t INTO OUTFILE '/tmp/x'"}
+{"timestamp": 1779003586.7574112, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'LOAD', only ['SELECT'] are permitted.", "sql_preview": "LOAD DATA INFILE '/etc/passwd' INTO TABLE t"}
+{"timestamp": 1779003586.7602906, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'xp_cmdshell'", "sql_preview": "SELECT xp_cmdshell('whoami')"}
+{"timestamp": 1779003586.7624202, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779003586.7650688, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'CREATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "CREATE TABLE evil (x INT)"}
+{"timestamp": 1779003586.7667785, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "INSERT INTO logs (msg) VALUES ('ok')"}
+{"timestamp": 1779003586.7699614, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM users WHERE id=1"}
+{"timestamp": 1779003586.7721283, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE users"}
+{"timestamp": 1779003586.7750225, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'INSERT' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "INSERT INTO users (name) VALUES ('hack')"}
+{"timestamp": 1779003586.7777932, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003586.7809649, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM (SELECT id FROM t) AS sub LIMIT 1000"}
+{"timestamp": 1779003586.7840648, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id, name FROM users WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779003586.7860818, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'TRUNCATETABLE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "TRUNCATE TABLE logs"}
+{"timestamp": 1779003586.7880712, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'UPDATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "UPDATE users SET name='x' WHERE id=1"}
+{"timestamp": 1779003586.7915492, "action": "BLOCKED", "layer": "Layer2_TableAllowlist", "reason": "Table 'users' is not in the allowlist: ['products']", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779003586.7945604, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM any_table LIMIT 1000"}
+{"timestamp": 1779003586.7971814, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}
+{"timestamp": 1779003586.800186, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779003586.8033798, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'secrets' is denied.", "sql_preview": "SELECT a.id FROM accounts a JOIN secrets s ON a.id=s.id"}
+{"timestamp": 1779003586.8060002, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'USERS' is denied.", "sql_preview": "SELECT * FROM USERS"}
+{"timestamp": 1779003586.8091419, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM orders LIMIT 1000"}
+{"timestamp": 1779003586.811299, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779003586.815052, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779003586.817056, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 50"}
+{"timestamp": 1779003586.8200552, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779003586.8245656, "action": "BLOCKED", "layer": "Layer3_QueryLength", "reason": "Query length 315 exceeds maximum 50 characters.", "sql_preview": "SELECT a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a..."}
+{"timestamp": 1779003586.828298, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779003586.8309655, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT name FROM tb_shop LIMIT 10"}
+{"timestamp": 1779003586.8492434, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779003586.8522434, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003586.854439, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM t LIMIT 5"}
+{"timestamp": 1779003586.8575509, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003586.8666387, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779003586.8686678, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003586.8721857, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003586.8721857, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779003586.8731759, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779003586.876005, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779003586.8791685, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003586.8811684, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779003586.8821683, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM t"}
+{"timestamp": 1779003586.8831692, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779003586.9007318, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM products"}
+{"timestamp": 1779003586.9069312, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'products' is denied.", "sql_preview": "SELECT * FROM products"}
+{"timestamp": 1779003586.9123363, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE products"}
+{"timestamp": 1779003586.9216063, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1"}
+{"timestamp": 1779003586.9292552, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}
+{"timestamp": 1779004000.7041767, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'INTO OUTFILE'", "sql_preview": "SELECT * FROM t INTO OUTFILE '/tmp/x'"}
+{"timestamp": 1779004000.7073965, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'LOAD', only ['SELECT'] are permitted.", "sql_preview": "LOAD DATA INFILE '/etc/passwd' INTO TABLE t"}
+{"timestamp": 1779004000.7095506, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'xp_cmdshell'", "sql_preview": "SELECT xp_cmdshell('whoami')"}
+{"timestamp": 1779004000.7123108, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779004000.7143874, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'CREATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "CREATE TABLE evil (x INT)"}
+{"timestamp": 1779004000.71797, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "INSERT INTO logs (msg) VALUES ('ok')"}
+{"timestamp": 1779004000.7199726, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM users WHERE id=1"}
+{"timestamp": 1779004000.72306, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE users"}
+{"timestamp": 1779004000.7251537, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'INSERT' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "INSERT INTO users (name) VALUES ('hack')"}
+{"timestamp": 1779004000.7284794, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779004000.7319887, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM (SELECT id FROM t) AS sub LIMIT 1000"}
+{"timestamp": 1779004000.7351637, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id, name FROM users WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779004000.7376337, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'TRUNCATETABLE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "TRUNCATE TABLE logs"}
+{"timestamp": 1779004000.7403603, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'UPDATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "UPDATE users SET name='x' WHERE id=1"}
+{"timestamp": 1779004000.7429266, "action": "BLOCKED", "layer": "Layer2_TableAllowlist", "reason": "Table 'users' is not in the allowlist: ['products']", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779004000.7451112, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM any_table LIMIT 1000"}
+{"timestamp": 1779004000.749121, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}
+{"timestamp": 1779004000.7521152, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779004000.755222, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'secrets' is denied.", "sql_preview": "SELECT a.id FROM accounts a JOIN secrets s ON a.id=s.id"}
+{"timestamp": 1779004000.758003, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'USERS' is denied.", "sql_preview": "SELECT * FROM USERS"}
+{"timestamp": 1779004000.761624, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM orders LIMIT 1000"}
+{"timestamp": 1779004000.7637072, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779004000.7675467, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779004000.7701633, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 50"}
+{"timestamp": 1779004000.7722595, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779004000.7768242, "action": "BLOCKED", "layer": "Layer3_QueryLength", "reason": "Query length 315 exceeds maximum 50 characters.", "sql_preview": "SELECT a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a..."}
+{"timestamp": 1779004000.7808237, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779004000.7833242, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT name FROM tb_shop LIMIT 10"}
+{"timestamp": 1779004000.803272, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779004000.8059392, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779004000.8088608, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM t LIMIT 5"}
+{"timestamp": 1779004000.81154, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779004000.820449, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779004000.8229532, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779004000.826292, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779004000.8272943, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779004000.8286011, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779004000.8307424, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779004000.833351, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779004000.8365345, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779004000.837054, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM t"}
+{"timestamp": 1779004000.8381028, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779004000.8588886, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM products"}
+{"timestamp": 1779004000.8640854, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'products' is denied.", "sql_preview": "SELECT * FROM products"}
+{"timestamp": 1779004000.8702953, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE products"}
+{"timestamp": 1779004000.8789127, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1"}
+{"timestamp": 1779004000.888061, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}
+{"timestamp": 1779009605.444663, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'INTO OUTFILE'", "sql_preview": "SELECT * FROM t INTO OUTFILE '/tmp/x'"}
+{"timestamp": 1779009605.446213, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'LOAD', only ['SELECT'] are permitted.", "sql_preview": "LOAD DATA INFILE '/etc/passwd' INTO TABLE t"}
+{"timestamp": 1779009605.4482186, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'xp_cmdshell'", "sql_preview": "SELECT xp_cmdshell('whoami')"}
+{"timestamp": 1779009605.4513228, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779009605.4533288, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'CREATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "CREATE TABLE evil (x INT)"}
+{"timestamp": 1779009605.4553294, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "INSERT INTO logs (msg) VALUES ('ok')"}
+{"timestamp": 1779009605.457329, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM users WHERE id=1"}
+{"timestamp": 1779009605.4608333, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE users"}
+{"timestamp": 1779009605.4633503, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'INSERT' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "INSERT INTO users (name) VALUES ('hack')"}
+{"timestamp": 1779009605.4653592, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009605.4693506, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM (SELECT id FROM t) AS sub LIMIT 1000"}
+{"timestamp": 1779009605.471864, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id, name FROM users WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779009605.4743872, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'TRUNCATETABLE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "TRUNCATE TABLE logs"}
+{"timestamp": 1779009605.4763865, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'UPDATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "UPDATE users SET name='x' WHERE id=1"}
+{"timestamp": 1779009605.4793887, "action": "BLOCKED", "layer": "Layer2_TableAllowlist", "reason": "Table 'users' is not in the allowlist: ['products']", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779009605.4824026, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM any_table LIMIT 1000"}
+{"timestamp": 1779009605.4849265, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}
+{"timestamp": 1779009605.4869254, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779009605.4891548, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'secrets' is denied.", "sql_preview": "SELECT a.id FROM accounts a JOIN secrets s ON a.id=s.id"}
+{"timestamp": 1779009605.4919734, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'USERS' is denied.", "sql_preview": "SELECT * FROM USERS"}
+{"timestamp": 1779009605.4945555, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM orders LIMIT 1000"}
+{"timestamp": 1779009605.4972427, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779009605.4999297, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779009605.5025194, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 50"}
+{"timestamp": 1779009605.505229, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779009605.5105078, "action": "BLOCKED", "layer": "Layer3_QueryLength", "reason": "Query length 315 exceeds maximum 50 characters.", "sql_preview": "SELECT a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a..."}
+{"timestamp": 1779009605.5132425, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779009605.5154421, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT name FROM tb_shop LIMIT 10"}
+{"timestamp": 1779009605.5345898, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779009605.5370665, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009605.5400736, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM t LIMIT 5"}
+{"timestamp": 1779009605.5425937, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009605.5511265, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779009605.5537317, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009605.556722, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009605.556722, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779009605.558888, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779009605.560403, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779009605.5628543, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009605.5651958, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009605.5659864, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM t"}
+{"timestamp": 1779009605.5665846, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779009605.6061404, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM products"}
+{"timestamp": 1779009605.6118917, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'products' is denied.", "sql_preview": "SELECT * FROM products"}
+{"timestamp": 1779009605.6159396, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE products"}
+{"timestamp": 1779009605.624314, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1"}
+{"timestamp": 1779009605.630965, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}
+{"timestamp": 1779009772.4087129, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'INTO OUTFILE'", "sql_preview": "SELECT * FROM t INTO OUTFILE '/tmp/x'"}
+{"timestamp": 1779009772.4122252, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement starts with 'LOAD', only ['SELECT'] are permitted.", "sql_preview": "LOAD DATA INFILE '/etc/passwd' INTO TABLE t"}
+{"timestamp": 1779009772.4142292, "action": "BLOCKED", "layer": "Layer1_BlockedKeyword", "reason": "Blocked keyword detected: 'xp_cmdshell'", "sql_preview": "SELECT xp_cmdshell('whoami')"}
+{"timestamp": 1779009772.4152298, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779009772.4172297, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'CREATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "CREATE TABLE evil (x INT)"}
+{"timestamp": 1779009772.4202306, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "INSERT INTO logs (msg) VALUES ('ok')"}
+{"timestamp": 1779009772.4227417, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM users WHERE id=1"}
+{"timestamp": 1779009772.4249368, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE users"}
+{"timestamp": 1779009772.4279346, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'INSERT' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "INSERT INTO users (name) VALUES ('hack')"}
+{"timestamp": 1779009772.4324453, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009772.4359562, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM (SELECT id FROM t) AS sub LIMIT 1000"}
+{"timestamp": 1779009772.438956, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id, name FROM users WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779009772.4399831, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'TRUNCATETABLE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "TRUNCATE TABLE logs"}
+{"timestamp": 1779009772.4419956, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'UPDATE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "UPDATE users SET name='x' WHERE id=1"}
+{"timestamp": 1779009772.444502, "action": "BLOCKED", "layer": "Layer2_TableAllowlist", "reason": "Table 'users' is not in the allowlist: ['products']", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779009772.4475098, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM any_table LIMIT 1000"}
+{"timestamp": 1779009772.450015, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}
+{"timestamp": 1779009772.4526315, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779009772.4551485, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'secrets' is denied.", "sql_preview": "SELECT a.id FROM accounts a JOIN secrets s ON a.id=s.id"}
+{"timestamp": 1779009772.457149, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'USERS' is denied.", "sql_preview": "SELECT * FROM USERS"}
+{"timestamp": 1779009772.4601495, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM orders LIMIT 1000"}
+{"timestamp": 1779009772.462662, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'users' is denied.", "sql_preview": "SELECT * FROM users"}
+{"timestamp": 1779009772.4651675, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779009772.4691744, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 50"}
+{"timestamp": 1779009772.4723094, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 100"}
+{"timestamp": 1779009772.4769738, "action": "BLOCKED", "layer": "Layer3_QueryLength", "reason": "Query length 315 exceeds maximum 50 characters.", "sql_preview": "SELECT a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a..."}
+{"timestamp": 1779009772.4804778, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779009772.4824843, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT name FROM tb_shop LIMIT 10"}
+{"timestamp": 1779009772.5109062, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779009772.5134602, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009772.515968, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM t LIMIT 5"}
+{"timestamp": 1779009772.5179732, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009772.5302327, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM users LIMIT 1000"}
+{"timestamp": 1779009772.5333924, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009772.5365293, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009772.5370724, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779009772.5381172, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779009772.5401945, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE x"}
+{"timestamp": 1779009772.5432017, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009772.5453277, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 1 LIMIT 1000"}
+{"timestamp": 1779009772.546832, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM t"}
+{"timestamp": 1779009772.5478373, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT 2 LIMIT 1000"}
+{"timestamp": 1779009772.5766356, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DELETE' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DELETE FROM products"}
+{"timestamp": 1779009772.5821948, "action": "BLOCKED", "layer": "Layer2_TableDenylist", "reason": "Access to table 'products' is denied.", "sql_preview": "SELECT * FROM products"}
+{"timestamp": 1779009772.5861979, "action": "BLOCKED", "layer": "Layer1_StatementType", "reason": "Statement type 'DROP' is not allowed. Only ['SELECT'] are permitted.", "sql_preview": "DROP TABLE products"}
+{"timestamp": 1779009772.5958679, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1"}
+{"timestamp": 1779009772.6021552, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM products LIMIT 1000"}

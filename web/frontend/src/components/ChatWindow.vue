@@ -194,7 +194,7 @@ async function submitQuery(text) {
       })
       return result
     },
-    onSqlStep(stepId, label, sql) {
+    onSqlStep(stepId, label, sql, performance, optimization) {
       // 每个 SQL 步骤执行后触发，为复杂查询/数据分析生成独立的 SQL 气泡
       const steps = messages.value[aiIdx].steps
       // Dedup: 相同内容已存在（如 onSqlConfirm 已显示），跳过
@@ -207,6 +207,8 @@ async function submitQuery(text) {
         type: 'sql',
         status: 'done',
         content: sql,
+        performance: performance || null,
+        optimization: optimization || null,
       }
       if (emptyIdx !== -1) {
         steps.splice(emptyIdx, 1, newStep)

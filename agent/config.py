@@ -38,6 +38,13 @@ class LLMConfig:
     api_key: Optional[str] = None
     temperature: float = 0.0
     max_tokens: Optional[int] = None
+    top_p: float = 0.8
+    client_max_retries: int = 10
+    dashscope_request_timeout: int = 60
+    dashscope_http_base_url: Optional[str] = None
+    dashscope_websocket_base_url: Optional[str] = None
+    dashscope_api_region: Optional[str] = None
+    dashscope_api_version: Optional[str] = None
     
     def __post_init__(self) -> None:
         """验证 LLM 配置。"""
@@ -47,8 +54,14 @@ class LLMConfig:
             raise ValueError("LLM model cannot be empty")
         if self.temperature < 0 or self.temperature > 2:
             raise ValueError("Temperature must be between 0 and 2")
+        if self.top_p < 0 or self.top_p > 1:
+            raise ValueError("top_p must be between 0 and 1")
         if self.max_tokens is not None and self.max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
+        if self.client_max_retries < 0:
+            raise ValueError("client_max_retries must be non-negative")
+        if self.dashscope_request_timeout <= 0:
+            raise ValueError("dashscope_request_timeout must be positive")
 
 
 @dataclass
@@ -151,6 +164,53 @@ class SecurityConfig:
             enable_audit_log=os.getenv("SECURITY_AUDIT_LOG", "true").lower() == "true",
             audit_log_file=audit_log_file,
             sensitive_column_patterns=patterns,
+        )
+
+
+@dataclass
+class SQLPerformanceConfig:
+    """SQL 性能配置。
+
+    第一阶段：执行前 EXPLAIN 分析 + 评分
+    第二阶段：候选 SQL 自动重写 + EXPLAIN 对比择优
+    """
+
+    enabled: bool = True
+    rows_warning_threshold: int = 10000
+    optimize_enabled: bool = False
+    max_rewrite_rounds: int = 1
+    min_score_improvement: int = 8
+    optimize_score_threshold: int = 70
+    semantic_validation_enabled: bool = True
+    semantic_sample_rows: int = 20
+    optimize_trigger_low_score: bool = True
+    optimize_trigger_large_rows: bool = True
+    optimize_trigger_full_scan: bool = True
+    optimize_trigger_filesort: bool = True
+    optimize_trigger_temporary: bool = True
+    optimize_trigger_high_cost: bool = False
+    optimize_min_triggers: int = 1
+    cost_warning_threshold: float = 1000.0
+
+    @classmethod
+    def from_env(cls) -> "SQLPerformanceConfig":
+        return cls(
+            enabled=os.getenv("SQL_PERF_ANALYZE_ENABLED", "true").lower() == "true",
+            rows_warning_threshold=int(os.getenv("SQL_PERF_ROWS_WARNING_THRESHOLD", "10000")),
+            optimize_enabled=os.getenv("SQL_PERF_OPTIMIZE_ENABLED", "false").lower() == "true",
+            max_rewrite_rounds=int(os.getenv("SQL_PERF_MAX_REWRITE_ROUNDS", "1")),
+            min_score_improvement=int(os.getenv("SQL_PERF_MIN_SCORE_IMPROVEMENT", "8")),
+            optimize_score_threshold=int(os.getenv("SQL_PERF_OPTIMIZE_SCORE_THRESHOLD", "70")),
+            semantic_validation_enabled=os.getenv("SQL_PERF_SEMANTIC_VALIDATION_ENABLED", "true").lower() == "true",
+            semantic_sample_rows=int(os.getenv("SQL_PERF_SEMANTIC_SAMPLE_ROWS", "20")),
+            optimize_trigger_low_score=os.getenv("SQL_PERF_TRIGGER_LOW_SCORE", "true").lower() == "true",
+            optimize_trigger_large_rows=os.getenv("SQL_PERF_TRIGGER_LARGE_ROWS", "true").lower() == "true",
+            optimize_trigger_full_scan=os.getenv("SQL_PERF_TRIGGER_FULL_SCAN", "true").lower() == "true",
+            optimize_trigger_filesort=os.getenv("SQL_PERF_TRIGGER_FILESORT", "true").lower() == "true",
+            optimize_trigger_temporary=os.getenv("SQL_PERF_TRIGGER_TEMPORARY", "true").lower() == "true",
+            optimize_trigger_high_cost=os.getenv("SQL_PERF_TRIGGER_HIGH_COST", "false").lower() == "true",
+            optimize_min_triggers=int(os.getenv("SQL_PERF_OPTIMIZE_MIN_TRIGGERS", "1")),
+            cost_warning_threshold=float(os.getenv("SQL_PERF_COST_WARNING_THRESHOLD", "1000")),
         )
 
 
@@ -279,7 +339,9 @@ class AgentConfig:
     cache: CacheConfig = field(default_factory=CacheConfig)
     schema_cache: SchemaCacheConfig = field(default_factory=SchemaCacheConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    sql_perf: SQLPerformanceConfig = field(default_factory=SQLPerformanceConfig)
     sql_confirm_enabled: bool = False  # SQL 执行前等待用户确认
+    sql_correction_max_retries: int = 2  # SQL 执行失败后的自动纠错重试次数
     
     @classmethod
     def from_env(cls, env_file: Optional[str] = None) -> "AgentConfig":
@@ -313,7 +375,14 @@ class AgentConfig:
             model=os.getenv("LLM_MODEL", "qwen-plus"),
             api_key=os.getenv("DASHSCOPE_API_KEY") or os.getenv("LLM_API_KEY"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.0")),
-            max_tokens=int(os.getenv("LLM_MAX_TOKENS")) if os.getenv("LLM_MAX_TOKENS") else None
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS")) if os.getenv("LLM_MAX_TOKENS") else None,
+            top_p=float(os.getenv("LLM_TOP_P", "0.8")),
+            client_max_retries=int(os.getenv("DASHSCOPE_CLIENT_MAX_RETRIES", "10")),
+            dashscope_request_timeout=int(os.getenv("DASHSCOPE_REQUEST_TIMEOUT", "60")),
+            dashscope_http_base_url=os.getenv("DASHSCOPE_HTTP_BASE_URL") or None,
+            dashscope_websocket_base_url=os.getenv("DASHSCOPE_WEBSOCKET_BASE_URL") or None,
+            dashscope_api_region=os.getenv("DASHSCOPE_API_REGION") or None,
+            dashscope_api_version=os.getenv("DASHSCOPE_API_VERSION") or None,
         )
         
         # 日志配置
@@ -344,7 +413,9 @@ class AgentConfig:
             cache=CacheConfig.from_env(),
             schema_cache=SchemaCacheConfig.from_env(),
             memory=MemoryConfig.from_env(),
+            sql_perf=SQLPerformanceConfig.from_env(),
             sql_confirm_enabled=os.getenv("SQL_CONFIRM_ENABLED", "false").lower() == "true",
+            sql_correction_max_retries=int(os.getenv("SQL_CORRECTION_MAX_RETRIES", "2")),
         )
     
     def validate(self) -> None:

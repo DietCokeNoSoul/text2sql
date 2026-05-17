@@ -449,13 +449,21 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
     sql_confirm.register_web_hook(session_id, hook)
 
     # 注册 SQL 步骤事件 hook（复杂/数据分析技能每步 SQL 执行后触发）
-    def _sql_step_hook(step_id: str, label: str, sql: str) -> None:
+    def _sql_step_hook(
+        step_id: str,
+        label: str,
+        sql: str,
+        performance: dict | None = None,
+        optimization: dict | None = None,
+    ) -> None:
         asyncio.run_coroutine_threadsafe(
             queue.put(json.dumps({
                 "type": "sql_step",
                 "step_id": step_id,
                 "label": label,
                 "sql": sql,
+                "performance": performance,
+                "optimization": optimization,
             })),
             loop,
         )

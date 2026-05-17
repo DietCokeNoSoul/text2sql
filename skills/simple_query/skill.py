@@ -15,6 +15,8 @@ from langgraph.graph import StateGraph, START, END
 from agent.skills.base import BaseSkill
 from agent.tools import SQLToolManager
 from agent.database import SQLDatabaseManager
+from agent.sql_execution_pipeline import run_sql_execution_pipeline
+from agent.sql_performance import SQLPerformanceAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,23 @@ class SimpleQuerySkill(BaseSkill):
         tool_manager: SQLToolManager,
         db_manager: SQLDatabaseManager,
         confirm_enabled: bool = False,
+        sql_correction_max_retries: int = 2,
+        sql_perf_enabled: bool = True,
+        sql_perf_rows_threshold: int = 10000,
+        sql_perf_optimize_enabled: bool = False,
+        sql_perf_max_rewrite_rounds: int = 1,
+        sql_perf_min_improvement: int = 8,
+        sql_perf_optimize_threshold: int = 70,
+        sql_perf_semantic_validation_enabled: bool = True,
+        sql_perf_semantic_sample_rows: int = 20,
+        sql_perf_optimize_trigger_low_score: bool = True,
+        sql_perf_optimize_trigger_large_rows: bool = True,
+        sql_perf_optimize_trigger_full_scan: bool = True,
+        sql_perf_optimize_trigger_filesort: bool = True,
+        sql_perf_optimize_trigger_temporary: bool = True,
+        sql_perf_optimize_trigger_high_cost: bool = False,
+        sql_perf_optimize_min_triggers: int = 1,
+        sql_perf_cost_warning_threshold: float = 1000.0,
     ):
         """初始化 Simple Query Skill。
         
@@ -43,6 +62,27 @@ class SimpleQuerySkill(BaseSkill):
         """
         self.db_manager = db_manager
         self.confirm_enabled = confirm_enabled
+        self._correction_max_retries = max(0, int(sql_correction_max_retries))
+        self._perf_analyzer = SQLPerformanceAnalyzer(
+            db_manager=db_manager,
+            llm=llm,
+            enabled=sql_perf_enabled,
+            optimize_enabled=sql_perf_optimize_enabled,
+            rows_warning_threshold=sql_perf_rows_threshold,
+            min_score_improvement=sql_perf_min_improvement,
+            max_rewrite_rounds=sql_perf_max_rewrite_rounds,
+            optimize_score_threshold=sql_perf_optimize_threshold,
+            semantic_validation_enabled=sql_perf_semantic_validation_enabled,
+            semantic_sample_rows=sql_perf_semantic_sample_rows,
+            optimize_trigger_low_score=sql_perf_optimize_trigger_low_score,
+            optimize_trigger_large_rows=sql_perf_optimize_trigger_large_rows,
+            optimize_trigger_full_scan=sql_perf_optimize_trigger_full_scan,
+            optimize_trigger_filesort=sql_perf_optimize_trigger_filesort,
+            optimize_trigger_temporary=sql_perf_optimize_trigger_temporary,
+            optimize_trigger_high_cost=sql_perf_optimize_trigger_high_cost,
+            optimize_min_triggers=sql_perf_optimize_min_triggers,
+            cost_warning_threshold=sql_perf_cost_warning_threshold,
+        )
 
         # Plan manager for task chain tracking
         from agent.session_plan import SessionPlanManager
@@ -268,48 +308,104 @@ class SimpleQuerySkill(BaseSkill):
             
             # 提取 SQL 查询
             sql_query = ""
+            tool_call_id = ""
             if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
                 tool_call = last_message.tool_calls[0]
                 sql_query = tool_call.get("args", {}).get("query", "")
+                tool_call_id = tool_call.get("id", "")
+
+            if not sql_query:
+                logger.warning("[SimpleQuery] No SQL tool call found in last message")
+                return {
+                    "messages": messages,
+                    "retry_count": state.get("retry_count", 0),
+                    "last_error": "No SQL tool call generated",
+                    "last_sql": "",
+                }
             
             # ── 用户禁令守卫（在执行前硬性拦截）──────────────────────────────
             if sql_query:
                 from agent.constraint_guard import check_constraints
                 check_constraints(sql_query, state.get("constraints", []))
 
+            # ── SQL 性能分析（第一阶段：只分析，不改写）────────────────────
+            perf_analysis = None
+            perf_opt_result = None
+            sql_to_execute = sql_query
+            if sql_query:
+                perf_opt_result = self._perf_analyzer.optimize_sql(
+                    sql_query,
+                    constraints=state.get("constraints", []),
+                )
+                sql_to_execute = perf_opt_result.final_sql
+                perf_analysis = perf_opt_result.final_analysis
+                logger.info("[SimpleQuery][SQLPerf][before] %s", perf_opt_result.original_analysis.summary)
+                logger.info("[SimpleQuery][SQLPerf][after] %s", perf_analysis.summary)
+                if perf_opt_result.optimized:
+                    logger.info("[SimpleQuery][SQLPerf] SQL optimized and replaced before execution")
+
             # ── SQL 执行前用户确认 ────────────────────────────────────────────
-            if self.confirm_enabled and sql_query:
+            if self.confirm_enabled and sql_to_execute:
                 from agent.sql_confirm import prompt_sql_confirmation, build_skip_message
                 from agent.types import SQLSkippedByUser
-                action, reason = prompt_sql_confirmation(sql_query)
+                action, reason = prompt_sql_confirmation(sql_to_execute)
                 if action == "skip":
-                    raise SQLSkippedByUser(sql_query, reason)
+                    raise SQLSkippedByUser(sql_to_execute, reason)
 
             # 执行查询
             try:
-                result = self.db_manager.execute_query(sql_query)
+                query_tool = self.tool_manager.get_query_tool()
+                pipeline_result = run_sql_execution_pipeline(
+                    sql=sql_to_execute,
+                    query_tool=query_tool,
+                    db_manager=self.db_manager,
+                    llm=self.llm,
+                    perf_analyzer=self._perf_analyzer,
+                    constraints=state.get("constraints", []),
+                    context_label="[SimpleQuery]",
+                    correction_max_retries=self._correction_max_retries,
+                    precomputed_optimization=perf_opt_result,
+                )
+                logger.info("[SimpleQuery][Pipeline] decision=%s", pipeline_result.decision)
+                if not pipeline_result.success:
+                    raise RuntimeError(pipeline_result.error or "Query failed after correction")
+                result = pipeline_result.result
+                sql_to_execute = pipeline_result.final_sql
                 
                 # 成功执行
                 logger.info("[SimpleQuery] Query executed successfully")
 
                 # ── 发射 SQL 步骤事件供前端实时显示 ──────────────────────
                 from agent import sql_step_emitter
-                sql_step_emitter.emit("1", "SQL 查询", sql_query)
+                sql_step_emitter.emit(
+                    "1",
+                    "SQL 查询",
+                    sql_to_execute,
+                    performance=(perf_analysis.to_dict() if perf_analysis else None),
+                    optimization=(perf_opt_result.to_dict() if perf_opt_result else None),
+                )
 
                 # ── Session plan: mark step 2 done ────────────────────────
                 task_id = state.get("task_id", "")
                 if self._plan_manager and task_id:
                     self._plan_manager.update_step(
                         task_id, 2, "done",
-                        sql=sql_query,
+                        sql=sql_to_execute,
                         result_summary=str(result)[:200],
+                        notes=(
+                            (perf_analysis.summary + (
+                                f" | 优化: {perf_opt_result.original_analysis.score}->{perf_analysis.score}"
+                                if perf_opt_result and perf_opt_result.optimized else ""
+                            ))[:200]
+                            if perf_analysis else ""
+                        ),
                     )
                     self._plan_manager.mark_complete(task_id, success=True)
                 
                 from langchain_core.messages import ToolMessage
                 tool_message = ToolMessage(
                     content=result,
-                    tool_call_id=last_message.tool_calls[0].get("id", ""),
+                    tool_call_id=tool_call_id,
                     name="sql_db_query"
                 )
                 
@@ -319,7 +415,7 @@ class SimpleQuerySkill(BaseSkill):
                     "messages": messages,
                     "retry_count": state.get("retry_count", 0),
                     "last_error": "",  # 清空错误
-                    "last_sql": sql_query
+                    "last_sql": sql_to_execute
                 }
                 
             except Exception as exec_error:
@@ -333,7 +429,7 @@ class SimpleQuerySkill(BaseSkill):
                 from langchain_core.messages import ToolMessage
                 tool_message = ToolMessage(
                     content=f"Error: {error_msg}",
-                    tool_call_id=last_message.tool_calls[0].get("id", ""),
+                    tool_call_id=tool_call_id,
                     name="sql_db_query"
                 )
                 
@@ -343,7 +439,7 @@ class SimpleQuerySkill(BaseSkill):
                     "messages": messages,
                     "retry_count": state.get("retry_count", 0),
                     "last_error": error_msg,
-                    "last_sql": sql_query
+                    "last_sql": sql_to_execute
                 }
                 
         except Exception as e:

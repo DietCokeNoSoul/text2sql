@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -104,6 +104,13 @@ _PERFORMANCE_HINT_EXTRA = """
 - 若业务允许，使用 LIMIT 限制结果集
 """
 
+_MINIMAL_FIX_EXTRA = """
+**最小修复要求**:
+- 仅修复当前报错点，不要重写整体查询结构
+- 尽量保持 SELECT 字段、JOIN 关系、过滤条件、排序逻辑不变
+- 除非修复错误必需，不新增 CTE/子查询/窗口函数
+"""
+
 
 def _llm_fix_sql(
     llm: BaseChatModel,
@@ -111,6 +118,7 @@ def _llm_fix_sql(
     error_info: SQLErrorInfo,
     column_hint: str = "",
     extra_hint: str = "",
+    minimal_fix_mode: bool = False,
 ) -> str:
     """Ask LLM to rewrite bad_sql; returns the fixed SQL string."""
     column_section = f"\n\n{column_hint}" if column_hint else ""
@@ -119,11 +127,13 @@ def _llm_fix_sql(
     if error_info.hints:
         hints_section = "\n**额外提示**:\n" + "\n".join(f"- {h}" for h in error_info.hints)
 
+    minimal_section = f"\n\n{_MINIMAL_FIX_EXTRA.strip()}" if minimal_fix_mode else ""
+
     user_content = (
         f"原始 SQL:\n{bad_sql}\n\n"
         f"错误类型: {error_info.error_class}\n"
         f"错误信息:\n{error_info.raw_message}"
-        f"{column_section}{extra_section}{hints_section}\n\n"
+        f"{column_section}{extra_section}{hints_section}{minimal_section}\n\n"
         "请输出修复后的 SQL（只输出 SQL，不要任何解释）："
     )
     messages = [
@@ -155,6 +165,7 @@ def _apply_fix(
     llm: BaseChatModel,
     label: str,
     attempt: int,
+    minimal_fix_mode: bool = False,
 ) -> Optional[str]:
     """
     Apply the appropriate fix for error_info.fix_strategy.
@@ -184,18 +195,36 @@ def _apply_fix(
         column_hint = _build_column_hint(error_info, db_manager)
         if column_hint:
             logger.info(f"{label} Column hint: {column_hint[:200]}")
-        return _llm_fix_sql(llm, bad_sql, error_info, column_hint=column_hint)
+        return _llm_fix_sql(
+            llm,
+            bad_sql,
+            error_info,
+            column_hint=column_hint,
+            minimal_fix_mode=minimal_fix_mode,
+        )
 
     # ── type: LLM with type-specific guidance ────────────────────────────────
     if strategy == "llm_rewrite_with_type_hint":
-        return _llm_fix_sql(llm, bad_sql, error_info, extra_hint=_TYPE_HINT_EXTRA.strip())
+        return _llm_fix_sql(
+            llm,
+            bad_sql,
+            error_info,
+            extra_hint=_TYPE_HINT_EXTRA.strip(),
+            minimal_fix_mode=minimal_fix_mode,
+        )
 
     # ── performance: LLM rewrite (cartesian / too many joins / timeout) ──────
     if category == SQLErrorCategory.PERFORMANCE:
-        return _llm_fix_sql(llm, bad_sql, error_info, extra_hint=_PERFORMANCE_HINT_EXTRA.strip())
+        return _llm_fix_sql(
+            llm,
+            bad_sql,
+            error_info,
+            extra_hint=_PERFORMANCE_HINT_EXTRA.strip(),
+            minimal_fix_mode=minimal_fix_mode,
+        )
 
     # ── default: plain LLM rewrite ───────────────────────────────────────────
-    return _llm_fix_sql(llm, bad_sql, error_info)
+    return _llm_fix_sql(llm, bad_sql, error_info, minimal_fix_mode=minimal_fix_mode)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -207,6 +236,8 @@ def execute_with_correction(
     llm: BaseChatModel,
     max_retries: int = 2,
     context_label: str = "",
+    rewrite_lineage: Optional[List[str]] = None,
+    prefer_minimal_fix: bool = False,
 ) -> Dict[str, Any]:
     """Execute a SQL query with category-aware automatic error correction.
 
@@ -242,6 +273,15 @@ def execute_with_correction(
     current_sql = sql
     last_error = ""
     last_error_info: Optional[SQLErrorInfo] = None
+    correction_trace: List[Dict[str, str]] = []
+
+    # Avoid rewrite loops: never re-try an already generated SQL in this step lineage.
+    seen_sql = {
+        (s or "").strip().rstrip(";")
+        for s in (rewrite_lineage or [])
+        if (s or "").strip()
+    }
+    seen_sql.add((current_sql or "").strip().rstrip(";"))
 
     for attempt in range(max_retries + 1):
         try:
@@ -256,6 +296,7 @@ def execute_with_correction(
                 "retries":        attempt,
                 "error_class":    "",
                 "error_category": "",
+                "correction_trace": correction_trace,
             }
         except Exception as exc:
             last_error = str(exc)
@@ -271,7 +312,13 @@ def execute_with_correction(
             # Try to produce a fixed SQL via category-aware strategy
             try:
                 fixed_sql = _apply_fix(
-                    last_error_info, current_sql, db_manager, llm, label, attempt
+                    last_error_info,
+                    current_sql,
+                    db_manager,
+                    llm,
+                    label,
+                    attempt,
+                    minimal_fix_mode=prefer_minimal_fix,
                 )
             except Exception as llm_exc:
                 logger.error(f"{label} Fix attempt failed: {llm_exc}")
@@ -280,6 +327,31 @@ def execute_with_correction(
             if fixed_sql is None:
                 # fail_fast / block_and_audit — stop immediately
                 break
+
+            normalized_fixed = fixed_sql.strip().rstrip(";")
+            if not normalized_fixed:
+                logger.warning(f"{label} Fixed SQL is empty — aborting correction loop")
+                break
+
+            if normalized_fixed in seen_sql:
+                logger.warning(f"{label} Detected rewrite loop (duplicate SQL), stop retrying")
+                correction_trace.append(
+                    {
+                        "attempt": str(attempt + 1),
+                        "strategy": last_error_info.fix_strategy,
+                        "status": "duplicate_sql_blocked",
+                    }
+                )
+                break
+
+            seen_sql.add(normalized_fixed)
+            correction_trace.append(
+                {
+                    "attempt": str(attempt + 1),
+                    "strategy": last_error_info.fix_strategy,
+                    "status": "candidate_generated",
+                }
+            )
 
             logger.info(
                 f"{label} [{last_error_info.fix_strategy}] fix proposed "
@@ -296,4 +368,5 @@ def execute_with_correction(
         "retries":        max_retries,
         "error_class":    error_info.error_class    if error_info else "",
         "error_category": error_info.category.value if error_info else "",
+        "correction_trace": correction_trace,
     }

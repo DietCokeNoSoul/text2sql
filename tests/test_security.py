@@ -17,6 +17,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # 把项目根目录加入 sys.path
@@ -27,7 +28,9 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from agent.config import SecurityConfig
+from agent.database import SQLDatabaseManager
 from agent.security import SQLSecurityGuard, ValidationResult
+from agent.tools import SQLToolManager
 from agent.types import SecurityViolationError
 
 
@@ -39,6 +42,16 @@ def _make_guard(**kwargs) -> SQLSecurityGuard:
     """用默认配置创建护栏，支持覆盖参数。"""
     cfg = SecurityConfig(**kwargs)
     return SQLSecurityGuard(cfg, dialect="sqlite")
+
+
+def _make_guard_with_columns(column_map, **kwargs) -> SQLSecurityGuard:
+    """创建带列映射提供者的护栏。"""
+    cfg = SecurityConfig(**kwargs)
+    return SQLSecurityGuard(
+        cfg,
+        dialect="sqlite",
+        column_map_provider=lambda: column_map,
+    )
 
 
 # ===========================================================================
@@ -282,11 +295,34 @@ class TestLayer4Sanitize(unittest.TestCase):
         self.assertNotIn("(6,)", result)
         self.assertNotIn("(5,)", result)
 
-    def test_select_star_falls_back_to_warning_mode(self):
-        guard = _make_guard()
+    def test_select_star_masks_sensitive_columns_with_column_map(self):
+        guard = _make_guard_with_columns({"users": ["name", "password"]})
         result = guard.sanitize_result(
             "[('alice', 'hash123')]",
             "SELECT * FROM users"
+        )
+        self.assertIn("***", result)
+        self.assertNotIn("hash123", result)
+
+    def test_table_star_masks_sensitive_columns_with_alias(self):
+        guard = _make_guard_with_columns({"users": ["id", "password", "name"]})
+        result = guard.sanitize_result(
+            "[(1, 'hash123', 'alice')]",
+            "SELECT u.* FROM users u"
+        )
+        self.assertIn("***", result)
+        self.assertNotIn("hash123", result)
+
+    def test_select_star_multi_table_keeps_warning_fallback(self):
+        guard = _make_guard_with_columns(
+            {
+                "users": ["id", "password"],
+                "orders": ["id", "amount"],
+            }
+        )
+        result = guard.sanitize_result(
+            "[(1, 'hash123', 10, 99.0)]",
+            "SELECT * FROM users JOIN orders ON users.id = orders.id"
         )
         self.assertIn("SecurityGuard", result)
         self.assertIn("hash123", result)
@@ -307,6 +343,66 @@ class TestLayer4Sanitize(unittest.TestCase):
         guard = _make_guard(sensitive_column_patterns=[r"salary"])
         self.assertTrue(guard.is_sensitive_column("employee_salary"))
         self.assertFalse(guard.is_sensitive_column("password"))  # 未配置
+
+
+class TestSecureQueryTool(unittest.TestCase):
+    """查询工具应经过SQLDatabaseManager安全出口。"""
+
+    def test_query_tool_masks_sensitive_columns(self):
+        cfg = SecurityConfig(enable_audit_log=False)
+        db_manager = SQLDatabaseManager.__new__(SQLDatabaseManager)
+        db_manager._guard = SQLSecurityGuard(
+            cfg,
+            dialect="sqlite",
+            column_map_provider=lambda: {"users": ["name", "password"]},
+        )
+        db_manager.execute_query = SQLDatabaseManager.execute_query.__get__(db_manager, SQLDatabaseManager)
+
+        mock_db = MagicMock()
+        mock_db.run.return_value = "[('alice', 'hash123')]"
+        db_manager._db = mock_db
+
+        tool_manager = SQLToolManager.__new__(SQLToolManager)
+        tool_manager.db_manager = db_manager
+        tool_manager.llm = MagicMock()
+        tool_manager._toolkit = None
+        tool_manager._tools = [MagicMock(name="sql_db_query")]
+        tool_manager._tools[0].name = "sql_db_query"
+        tool_manager._tools[0].description = "execute sql query"
+        tool_manager._tools[0].args_schema = None
+        tool_manager._tool_nodes = {}
+
+        result = tool_manager.get_query_tool().invoke({"query": "SELECT name, password FROM users"})
+        self.assertIn("***", result)
+        self.assertNotIn("hash123", result)
+
+    def test_query_tool_masks_select_star_sensitive_columns(self):
+        cfg = SecurityConfig(enable_audit_log=False)
+        db_manager = SQLDatabaseManager.__new__(SQLDatabaseManager)
+        db_manager._guard = SQLSecurityGuard(
+            cfg,
+            dialect="sqlite",
+            column_map_provider=lambda: {"users": ["name", "password"]},
+        )
+        db_manager.execute_query = SQLDatabaseManager.execute_query.__get__(db_manager, SQLDatabaseManager)
+
+        mock_db = MagicMock()
+        mock_db.run.return_value = "[('alice', 'hash123')]"
+        db_manager._db = mock_db
+
+        tool_manager = SQLToolManager.__new__(SQLToolManager)
+        tool_manager.db_manager = db_manager
+        tool_manager.llm = MagicMock()
+        tool_manager._toolkit = None
+        tool_manager._tools = [MagicMock(name="sql_db_query")]
+        tool_manager._tools[0].name = "sql_db_query"
+        tool_manager._tools[0].description = "execute sql query"
+        tool_manager._tools[0].args_schema = None
+        tool_manager._tool_nodes = {}
+
+        result = tool_manager.get_query_tool().invoke({"query": "SELECT * FROM users"})
+        self.assertIn("***", result)
+        self.assertNotIn("hash123", result)
 
 
 # ===========================================================================

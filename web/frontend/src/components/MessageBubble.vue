@@ -32,6 +32,31 @@
                 <div v-if="s.content" class="sql-block">
                   <pre><code>{{ s.content }}</code></pre>
                 </div>
+                <div v-if="s.performance || s.optimization" class="perf-card">
+                  <div class="perf-row">
+                    <span class="perf-k">评分</span>
+                    <span class="perf-v">{{ perfScoreText(s.performance, s.optimization) }}</span>
+                  </div>
+                  <div class="perf-row" v-if="s.performance">
+                    <span class="perf-k">索引</span>
+                    <span class="perf-v">{{ s.performance.uses_index ? '命中' : '未命中' }}</span>
+                  </div>
+                  <div class="perf-row" v-if="s.performance">
+                    <span class="perf-k">全表扫描</span>
+                    <span class="perf-v">{{ s.performance.full_scan ? '是' : '否' }}</span>
+                  </div>
+                  <div class="perf-row" v-if="s.optimization">
+                    <span class="perf-k">自动替换</span>
+                    <span class="perf-v">{{ s.optimization.optimized ? '已替换' : '未替换' }}</span>
+                  </div>
+                  <div class="perf-row" v-if="s.optimization && s.optimization.semantic_check_passed !== null && s.optimization.semantic_check_passed !== undefined">
+                    <span class="perf-k">语义校验</span>
+                    <span class="perf-v">{{ s.optimization.semantic_check_passed ? '通过' : '未通过' }}</span>
+                  </div>
+                  <div class="perf-summary" v-if="perfSummaryText(s.performance)">
+                    {{ perfSummaryText(s.performance) }}
+                  </div>
+                </div>
               </div>
             </template>
             <template v-else>
@@ -48,6 +73,31 @@
                   <div v-if="item.items[0].content" class="sql-block">
                     <pre><code>{{ item.items[0].content }}</code></pre>
                   </div>
+                  <div v-if="item.items[0].performance || item.items[0].optimization" class="perf-card">
+                    <div class="perf-row">
+                      <span class="perf-k">评分</span>
+                      <span class="perf-v">{{ perfScoreText(item.items[0].performance, item.items[0].optimization) }}</span>
+                    </div>
+                    <div class="perf-row" v-if="item.items[0].performance">
+                      <span class="perf-k">索引</span>
+                      <span class="perf-v">{{ item.items[0].performance.uses_index ? '命中' : '未命中' }}</span>
+                    </div>
+                    <div class="perf-row" v-if="item.items[0].performance">
+                      <span class="perf-k">全表扫描</span>
+                      <span class="perf-v">{{ item.items[0].performance.full_scan ? '是' : '否' }}</span>
+                    </div>
+                    <div class="perf-row" v-if="item.items[0].optimization">
+                      <span class="perf-k">自动替换</span>
+                      <span class="perf-v">{{ item.items[0].optimization.optimized ? '已替换' : '未替换' }}</span>
+                    </div>
+                    <div class="perf-row" v-if="item.items[0].optimization && item.items[0].optimization.semantic_check_passed !== null && item.items[0].optimization.semantic_check_passed !== undefined">
+                      <span class="perf-k">语义校验</span>
+                      <span class="perf-v">{{ item.items[0].optimization.semantic_check_passed ? '通过' : '未通过' }}</span>
+                    </div>
+                    <div class="perf-summary" v-if="perfSummaryText(item.items[0].performance)">
+                      {{ perfSummaryText(item.items[0].performance) }}
+                    </div>
+                  </div>
                 </template>
                 <!-- 多条 SQL：二级折叠列表 -->
                 <template v-else>
@@ -60,6 +110,31 @@
                     </div>
                     <div v-if="s.content && expandedSqls.has(si)" class="sql-block">
                       <pre><code>{{ s.content }}</code></pre>
+                    </div>
+                    <div v-if="expandedSqls.has(si) && (s.performance || s.optimization)" class="perf-card">
+                      <div class="perf-row">
+                        <span class="perf-k">评分</span>
+                        <span class="perf-v">{{ perfScoreText(s.performance, s.optimization) }}</span>
+                      </div>
+                      <div class="perf-row" v-if="s.performance">
+                        <span class="perf-k">索引</span>
+                        <span class="perf-v">{{ s.performance.uses_index ? '命中' : '未命中' }}</span>
+                      </div>
+                      <div class="perf-row" v-if="s.performance">
+                        <span class="perf-k">全表扫描</span>
+                        <span class="perf-v">{{ s.performance.full_scan ? '是' : '否' }}</span>
+                      </div>
+                      <div class="perf-row" v-if="s.optimization">
+                        <span class="perf-k">自动替换</span>
+                        <span class="perf-v">{{ s.optimization.optimized ? '已替换' : '未替换' }}</span>
+                      </div>
+                      <div class="perf-row" v-if="s.optimization && s.optimization.semantic_check_passed !== null && s.optimization.semantic_check_passed !== undefined">
+                        <span class="perf-k">语义校验</span>
+                        <span class="perf-v">{{ s.optimization.semantic_check_passed ? '通过' : '未通过' }}</span>
+                      </div>
+                      <div class="perf-summary" v-if="perfSummaryText(s.performance)">
+                        {{ perfSummaryText(s.performance) }}
+                      </div>
                     </div>
                   </div>
                 </template>
@@ -156,6 +231,22 @@ watch(() => props.message.streaming, (streaming) => {
 
 function renderMarkdown(text) {
   return marked.parse(text ?? '')
+}
+
+function perfSummaryText(perf) {
+  return perf?.summary || ''
+}
+
+function perfScoreText(perf, opt) {
+  const after = perf?.score
+  const before = opt?.original_analysis?.score
+  if (typeof before === 'number' && typeof after === 'number') {
+    return `${before} → ${after}`
+  }
+  if (typeof after === 'number') {
+    return `${after}`
+  }
+  return '未知'
 }
 </script>
 
@@ -321,6 +412,41 @@ function renderMarkdown(text) {
   word-break: break-all;
 }
 .sql-block code { background: none; padding: 0; color: inherit; }
+
+.perf-card {
+  margin: 8px 0 0 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #e5eaf3;
+  background: #f7f9fc;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.perf-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.perf-k {
+  color: #7a8599;
+  min-width: 56px;
+}
+
+.perf-v {
+  color: #2d3648;
+  font-weight: 600;
+}
+
+.perf-summary {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #4b5565;
+}
 
 /* 回答内容 */
 .answer-content {
