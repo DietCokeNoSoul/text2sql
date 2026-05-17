@@ -27,6 +27,7 @@
                   <span class="step-section-label">{{ s.label }}</span>
                   <span v-if="s.status === 'done'" class="step-check">✓</span>
                   <span v-else-if="s.status === 'skipped'" class="step-skip">跳过</span>
+                  <span v-if="typeof s.elapsedMs === 'number'" class="step-elapsed">{{ formatElapsed(s.elapsedMs) }}</span>
                   <span v-else class="step-dots-ani"><span/><span/><span/></span>
                 </div>
                 <div v-if="s.content" class="sql-block">
@@ -53,9 +54,6 @@
                     <span class="perf-k">语义校验</span>
                     <span class="perf-v">{{ s.optimization.semantic_check_passed ? '通过' : '未通过' }}</span>
                   </div>
-                  <div class="perf-summary" v-if="perfSummaryText(s.performance)">
-                    {{ perfSummaryText(s.performance) }}
-                  </div>
                 </div>
               </div>
             </template>
@@ -64,12 +62,19 @@
               <div class="step-header-row clickable" @click="toggleSqlGroup">
                 <span class="step-section-label">SQL 查询</span>
                 <span class="step-check">✓</span>
+                <span v-if="sqlGroupTotalElapsed(item.items) !== null" class="step-elapsed">{{ formatElapsed(sqlGroupTotalElapsed(item.items)) }}</span>
                 <span class="sql-toggle" :class="{ expanded: sqlGroupExpanded }">▾</span>
               </div>
               <!-- 一级展开内容 -->
               <div v-if="sqlGroupExpanded" class="sql-group-body">
                 <!-- 只有一条 SQL：直接显示代码 -->
                 <template v-if="item.items.length === 1">
+                  <div class="step-header-row child single-sql-row">
+                    <span class="step-section-label child-label">{{ item.items[0].label }}</span>
+                    <span v-if="item.items[0].status === 'skipped'" class="step-skip">跳过</span>
+                    <span v-else class="step-check">✓</span>
+                    <span v-if="typeof item.items[0].elapsedMs === 'number'" class="step-elapsed">{{ formatElapsed(item.items[0].elapsedMs) }}</span>
+                  </div>
                   <div v-if="item.items[0].content" class="sql-block">
                     <pre><code>{{ item.items[0].content }}</code></pre>
                   </div>
@@ -94,8 +99,11 @@
                       <span class="perf-k">语义校验</span>
                       <span class="perf-v">{{ item.items[0].optimization.semantic_check_passed ? '通过' : '未通过' }}</span>
                     </div>
-                    <div class="perf-summary" v-if="perfSummaryText(item.items[0].performance)">
-                      {{ perfSummaryText(item.items[0].performance) }}
+                  </div>
+                  <div v-else-if="item.items[0].note" class="perf-card">
+                    <div class="perf-row">
+                      <span class="perf-k">备注</span>
+                      <span class="perf-v perf-note">{{ item.items[0].note }}</span>
                     </div>
                   </div>
                 </template>
@@ -106,6 +114,7 @@
                       <span class="step-section-label child-label">{{ s.label }}</span>
                       <span v-if="s.status === 'skipped'" class="step-skip">跳过</span>
                       <span v-else class="step-check">✓</span>
+                      <span v-if="typeof s.elapsedMs === 'number'" class="step-elapsed">{{ formatElapsed(s.elapsedMs) }}</span>
                       <span v-if="s.content" class="sql-toggle" :class="{ expanded: expandedSqls.has(si) }">▾</span>
                     </div>
                     <div v-if="s.content && expandedSqls.has(si)" class="sql-block">
@@ -132,8 +141,11 @@
                         <span class="perf-k">语义校验</span>
                         <span class="perf-v">{{ s.optimization.semantic_check_passed ? '通过' : '未通过' }}</span>
                       </div>
-                      <div class="perf-summary" v-if="perfSummaryText(s.performance)">
-                        {{ perfSummaryText(s.performance) }}
+                    </div>
+                    <div v-else-if="expandedSqls.has(si) && s.note" class="perf-card">
+                      <div class="perf-row">
+                        <span class="perf-k">备注</span>
+                        <span class="perf-v perf-note">{{ s.note }}</span>
                       </div>
                     </div>
                   </div>
@@ -233,18 +245,26 @@ function renderMarkdown(text) {
   return marked.parse(text ?? '')
 }
 
-function perfSummaryText(perf) {
-  return perf?.summary || ''
+function formatElapsed(ms) {
+  return `${Math.max(0, Math.round(ms))}ms`
+}
+
+function sqlGroupTotalElapsed(items) {
+  const values = (items || [])
+    .map(item => item?.elapsedMs)
+    .filter(value => typeof value === 'number')
+  if (!values.length) return null
+  return values.reduce((sum, value) => sum + value, 0)
 }
 
 function perfScoreText(perf, opt) {
   const after = perf?.score
   const before = opt?.original_analysis?.score
   if (typeof before === 'number' && typeof after === 'number') {
-    return `${before} → ${after}`
+    return `${before} → ${after} / 100`
   }
   if (typeof after === 'number') {
-    return `${after}`
+    return `${after} / 100`
   }
   return '未知'
 }
@@ -329,6 +349,11 @@ function perfScoreText(perf, opt) {
 
 .step-check { color: #67c23a; font-size: 13px; }
 .step-skip  { color: #909399; font-size: 12px; }
+.step-elapsed {
+  color: #909399;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
 
 /* 折叠箭头 */
 .step-header-row.clickable {
@@ -353,6 +378,10 @@ function perfScoreText(perf, opt) {
 /* SQL 组内容区 */
 .sql-group-body {
   margin-top: 2px;
+}
+
+.single-sql-row {
+  margin-left: 12px;
 }
 
 /* 子级 SQL 项 */
@@ -442,10 +471,10 @@ function perfScoreText(perf, opt) {
   font-weight: 600;
 }
 
-.perf-summary {
-  margin-top: 2px;
-  font-size: 12px;
-  color: #4b5565;
+.perf-note {
+  font-weight: 500;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* 回答内容 */

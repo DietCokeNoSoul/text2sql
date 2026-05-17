@@ -54,7 +54,7 @@
 <script setup>
 import { ref, nextTick, watch, onMounted, inject } from 'vue'
 import MessageBubble from './MessageBubble.vue'
-import { streamQuery, getHistory } from '../api/chat.js'
+import { streamQuery, getHistory, getPlans } from '../api/chat.js'
 
 const props = defineProps({
   threadId: { type: String, default: '' },
@@ -77,6 +77,54 @@ const suggestions = [
   '最近10条数据',
 ]
 
+function parseSqlDisplayFromNote(note) {
+  if (!note || typeof note !== 'string') {
+    return { elapsedMs: null, performance: null, optimization: null }
+  }
+
+  const elapsedMatch = note.match(/耗时\s*[:：]\s*(\d+)\s*ms/i)
+  const elapsedMs = elapsedMatch ? Number(elapsedMatch[1]) : null
+
+  let beforeScore = null
+  let afterScore = null
+
+  const scoreArrowMatch = note.match(/(?:评分|优化)\s*[:：]\s*(\d+)\s*(?:->|→)\s*(\d+)/)
+  if (scoreArrowMatch) {
+    beforeScore = Number(scoreArrowMatch[1])
+    afterScore = Number(scoreArrowMatch[2])
+  }
+
+  const scoreSingleMatch = note.match(/性能评分\s*=\s*(\d+)\s*\/\s*100/)
+  if (!scoreArrowMatch && scoreSingleMatch) {
+    beforeScore = Number(scoreSingleMatch[1])
+    afterScore = Number(scoreSingleMatch[1])
+  }
+
+  const hasIndexHit = note.includes('命中索引') && !note.includes('未命中索引')
+  const hasIndexMiss = note.includes('未命中索引')
+  const hasNoFullScan = note.includes('无明显全表扫描')
+  const hasFullScan = !hasNoFullScan && note.includes('全表扫描')
+
+  const performance =
+    typeof afterScore === 'number'
+      ? {
+          score: afterScore,
+          uses_index: hasIndexHit ? true : hasIndexMiss ? false : false,
+          full_scan: hasNoFullScan ? false : hasFullScan ? true : false,
+        }
+      : null
+
+  const optimization =
+    typeof beforeScore === 'number' && typeof afterScore === 'number'
+      ? {
+          optimized: beforeScore !== afterScore,
+          original_analysis: { score: beforeScore },
+        }
+      : null
+
+  return { elapsedMs, performance, optimization }
+}
+
 // 切换 session 时重新加载历史
 watch(() => props.threadId, async (newId) => {
   messages.value = []
@@ -86,18 +134,85 @@ watch(() => props.threadId, async (newId) => {
 })
 
 async function loadHistory(threadId) {
-  const { messages: hist } = await getHistory(threadId)
+  const [{ messages: hist }, { plans }] = await Promise.all([
+    getHistory(threadId),
+    getPlans(threadId),
+  ])
+
+  // SQL 展示元信息（尤其耗时）统一以 plan 为准；同一 SQL 允许出现多次，按时间顺序消费。
+  const sqlPlanMetaMap = new Map()
+  ;(plans || [])
+    .slice()
+    .sort((a, b) => String(a?.created_at || '').localeCompare(String(b?.created_at || '')))
+    .forEach(plan => {
+      ;(plan?.steps || []).forEach(step => {
+        const sql = step?.sql || ''
+        if (!sql) return
+        const arr = sqlPlanMetaMap.get(sql) || []
+        arr.push({
+          note: step?.notes || '',
+          elapsedMs: typeof step?.elapsed_ms === 'number' ? step.elapsed_ms : null,
+          stepId: String(step?.step_id ?? ''),
+        })
+        sqlPlanMetaMap.set(sql, arr)
+      })
+    })
+
+  const sqlPlanMetaCursor = new Map()
+  const consumePlanMeta = (sql) => {
+    if (!sql || !sqlPlanMetaMap.has(sql)) return null
+    const arr = sqlPlanMetaMap.get(sql) || []
+    const idx = sqlPlanMetaCursor.get(sql) || 0
+    const item = arr[idx] || arr[arr.length - 1] || null
+    sqlPlanMetaCursor.set(sql, idx + 1)
+    return item
+  }
+
   messages.value = hist.map(m => {
     if (m.role !== 'assistant') return { role: m.role, content: m.content, steps: [], streaming: false }
 
     // 历史 AI 消息重建为 steps 格式，与流式完成后保持一致
     const steps = []
-    // 支持新的 sqls 数组（也兼容旧的 sql 字段）
-    const sqls = m.sqls || (m.sql ? [m.sql] : [])
-    sqls.forEach((sql, idx) => {
-      const label = sqls.length > 1 ? `SQL 查询 ${idx + 1}` : 'SQL 查询'
-      steps.push({ key: `sql_${idx}`, label, type: 'sql', status: 'done', content: sql })
-    })
+    const sqlSteps = Array.isArray(m.sql_steps) ? m.sql_steps : []
+    if (sqlSteps.length) {
+      sqlSteps.forEach((step, idx) => {
+        const label = step?.label || (sqlSteps.length > 1 ? `SQL 查询 ${idx + 1}` : 'SQL 查询')
+        const planMeta = consumePlanMeta(step?.sql || '') || {}
+        const fallbackNote = planMeta.note || ''
+        const parsedFromNote = parseSqlDisplayFromNote(fallbackNote)
+        steps.push({
+          key: `sql_${idx}`,
+          label,
+          type: 'sql',
+          status: 'done',
+          content: step?.sql || '',
+          elapsedMs: typeof planMeta.elapsedMs === 'number' ? planMeta.elapsedMs : parsedFromNote.elapsedMs,
+          performance: parsedFromNote.performance || null,
+          optimization: parsedFromNote.optimization || null,
+          note: fallbackNote,
+        })
+      })
+    } else {
+      // 支持旧的 sqls 数组（也兼容旧的 sql 字段）
+      const sqls = m.sqls || (m.sql ? [m.sql] : [])
+      sqls.forEach((sql, idx) => {
+        const label = sqls.length > 1 ? `SQL 查询 ${idx + 1}` : 'SQL 查询'
+        const planMeta = consumePlanMeta(sql) || {}
+        const fallbackNote = planMeta.note || ''
+        const parsedFromNote = parseSqlDisplayFromNote(fallbackNote)
+        steps.push({
+          key: `sql_${idx}`,
+          label,
+          type: 'sql',
+          status: 'done',
+          content: sql,
+          elapsedMs: typeof planMeta.elapsedMs === 'number' ? planMeta.elapsedMs : parsedFromNote.elapsedMs,
+          performance: parsedFromNote.performance,
+          optimization: parsedFromNote.optimization,
+          note: fallbackNote,
+        })
+      })
+    }
     steps.push({ key: 'answer', label: '回答', type: 'answer', status: 'done', content: m.content })
     return { role: 'assistant', content: m.content, steps, streaming: false }
   })
@@ -194,11 +309,24 @@ async function submitQuery(text) {
       })
       return result
     },
-    onSqlStep(stepId, label, sql, performance, optimization) {
+    onSqlStep(stepId, label, sql, performance, optimization, elapsedMs) {
       // 每个 SQL 步骤执行后触发，为复杂查询/数据分析生成独立的 SQL 气泡
       const steps = messages.value[aiIdx].steps
-      // Dedup: 相同内容已存在（如 onSqlConfirm 已显示），跳过
-      if (steps.some(s => s.type === 'sql' && s.content === sql)) return
+      // 如果同一条 SQL 已在确认阶段展示过，则原位补齐执行结果与耗时。
+      const existingIdx = steps.findIndex(s => s.type === 'sql' && s.content === sql)
+      if (existingIdx !== -1) {
+        steps.splice(existingIdx, 1, {
+          ...steps[existingIdx],
+          key: `sql_step_${stepId}`,
+          label: label || steps[existingIdx].label || `SQL 查询 ${stepId}`,
+          status: 'done',
+          elapsedMs: typeof elapsedMs === 'number' ? elapsedMs : steps[existingIdx].elapsedMs ?? null,
+          performance: performance || steps[existingIdx].performance || null,
+          optimization: optimization || steps[existingIdx].optimization || null,
+        })
+        scrollToBottom()
+        return
+      }
       // 找第一个空的占位符（pending 且无内容）
       const emptyIdx = steps.findIndex(s => s.type === 'sql' && s.status === 'pending' && !s.content)
       const newStep = {
@@ -207,6 +335,7 @@ async function submitQuery(text) {
         type: 'sql',
         status: 'done',
         content: sql,
+        elapsedMs: typeof elapsedMs === 'number' ? elapsedMs : null,
         performance: performance || null,
         optimization: optimization || null,
       }

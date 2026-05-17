@@ -120,3 +120,19 @@
 {"timestamp": 1779012364.4359355, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) FROM tb_shop LIMIT 1000"}
 {"timestamp": 1779012365.0999346, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) FROM tb_shop LIMIT 1000"}
 {"timestamp": 1779012440.46057, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT name FROM tb_shop ORDER BY id LIMIT 1"}
+{"timestamp": 1779013871.1599486, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT COUNT(*) AS user_count FROM tb_user LIMIT 1000"}
+{"timestamp": 1779013912.1503098, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT nick_name FROM tb_user ORDER BY id ASC LIMIT 1"}
+{"timestamp": 1779014033.8377333, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT create_time FROM tb_user WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779014186.9878395, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM tb_user WHERE nick_name = '小鱼同学' LIMIT 1"}
+{"timestamp": 1779014413.8908386, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id, create_time FROM tb_blog WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779014491.5903256, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id, create_time FROM tb_blog WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779014508.8955727, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT create_time FROM tb_user WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779014580.138476, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT nick_name FROM tb_user WHERE id = 1 LIMIT 1"}
+{"timestamp": 1779015220.678046, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT * FROM tb_user ORDER BY create_time ASC LIMIT 1"}
+{"timestamp": 1779015424.3531168, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT nick_name FROM tb_user WHERE id = 1 LIMIT 1"}
+{"timestamp": 1779015525.7110746, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT create_time FROM tb_user WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779015626.8024309, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT id FROM tb_user WHERE nick_name = '小鱼同学' LIMIT 1"}
+{"timestamp": 1779029541.9675088, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT nick_name FROM tb_user WHERE id = 1 LIMIT 1000"}
+{"timestamp": 1779029692.0645883, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT nick_name FROM tb_user ORDER BY id ASC LIMIT 1"}
+{"timestamp": 1779029862.1887105, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT nick_name FROM tb_user ORDER BY id ASC LIMIT 1"}
+{"timestamp": 1779030210.23403, "action": "ALLOWED", "layer": null, "reason": null, "sql_preview": "SELECT nick_name FROM tb_user ORDER BY id ASC LIMIT 1"}

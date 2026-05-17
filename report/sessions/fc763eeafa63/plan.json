@@ -1,0 +1,37 @@
+{
+  "task_id": "fc763eeafa63",
+  "title": "第一个用户的名字是什么？",
+  "description": "第一个用户的名字是什么？",
+  "skill": "simple_query",
+  "thread_id": "43bac695-091e-4827-bdbb-6ffe91574050",
+  "status": "done",
+  "created_at": "2026-05-17 23:03:28",
+  "updated_at": "2026-05-17 23:03:30",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "generate_query: 生成SQL查询",
+      "status": "done",
+      "sql": "",
+      "elapsed_ms": 1000,
+      "result_summary": "",
+      "error": "",
+      "started_at": "2026-05-17 23:03:28",
+      "completed_at": "2026-05-17 23:03:29",
+      "notes": ""
+    },
+    {
+      "step_id": 2,
+      "description": "execute_query: 执行SQL查询",
+      "status": "done",
+      "sql": "SELECT nick_name FROM tb_user ORDER BY id ASC LIMIT 1",
+      "elapsed_ms": 32,
+      "result_summary": "[('小鱼同学',)]",
+      "error": "",
+      "started_at": "2026-05-17 23:03:29",
+      "completed_at": "2026-05-17 23:03:30",
+      "notes": "耗时: 32ms | 评分: 65->65 | 性能评分=65/100，未命中索引，无明显全表扫描，预计扫描行数未知，预计代价=102.00，额外操作=filesort"
+    }
+  ],
+  "notes": []
+}

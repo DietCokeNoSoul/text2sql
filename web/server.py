@@ -128,14 +128,30 @@ async def _db_delete_session(thread_id: str) -> None:
     if plans_dir.exists():
         import shutil
         for task_dir in plans_dir.iterdir():
-            json_file = task_dir / "plan.json"
-            if json_file.exists():
+            if not task_dir.is_dir():
+                continue
+
+            matched = False
+            marker_file = task_dir / "thread_id.txt"
+            if marker_file.exists():
                 try:
-                    data = json.loads(json_file.read_text(encoding="utf-8"))
-                    if data.get("thread_id", "") == thread_id:
-                        shutil.rmtree(task_dir, ignore_errors=True)
+                    if marker_file.read_text(encoding="utf-8").strip() == thread_id:
+                        matched = True
                 except Exception:
                     pass
+
+            if not matched:
+                json_file = task_dir / "plan.json"
+                if json_file.exists():
+                    try:
+                        data = json.loads(json_file.read_text(encoding="utf-8"))
+                        if data.get("thread_id", "") == thread_id:
+                            matched = True
+                    except Exception:
+                        pass
+
+            if matched:
+                shutil.rmtree(task_dir, ignore_errors=True)
 
 
 async def _db_update_session(thread_id: str, name: str | None = None, touch: bool = False):
@@ -304,22 +320,64 @@ async def get_history(thread_id: str):
             turn_msgs = raw[ui + 1:end]
 
             # 从该轮消息中提取 SQL：
-            # 1) AIMessage with tool_calls → simple_query 的工具调用 SQL
-            # 2) AIMessage content 以 __sql__: 开头 → complex/data_analysis 注入的 SQL 标记
+            # 1) __sqlmeta__:{json}（包含耗时/性能信息）
+            # 2) __sql__:{step_id}:{label}:{sql}（兼容旧格式）
+            # 3) tool_calls（simple_query 兼容回退）
+            turn_sql_steps = []
             turn_sqls = []
+            has_sql_meta = False
+
             for m in turn_msgs:
-                if isinstance(m, AIMessage):
-                    if getattr(m, "tool_calls", None):
-                        for tc in m.tool_calls:
-                            args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-                            q = args.get("query", "") or args.get("sql", "")
-                            if q:
-                                turn_sqls.append(q)
-                    elif isinstance(m.content, str) and m.content.startswith("__sql__:"):
-                        # Format: __sql__:{step_id}:{label}:{sql}
-                        parts = m.content.split(":", 3)
-                        if len(parts) == 4:
-                            turn_sqls.append(parts[3])
+                if not isinstance(m, AIMessage) or not isinstance(m.content, str):
+                    continue
+                if m.content.startswith("__sqlmeta__:"):
+                    try:
+                        payload = json.loads(m.content[len("__sqlmeta__:"):])
+                        sql_text = payload.get("sql", "")
+                        if sql_text:
+                            has_sql_meta = True
+                            turn_sql_steps.append({
+                                "step_id": str(payload.get("step_id", "")),
+                                "label": payload.get("label", "SQL 查询"),
+                                "sql": sql_text,
+                                "elapsed_ms": payload.get("elapsed_ms"),
+                                "performance": payload.get("performance"),
+                                "optimization": payload.get("optimization"),
+                            })
+                            turn_sqls.append(sql_text)
+                    except Exception:
+                        continue
+
+            if not has_sql_meta:
+                for m in turn_msgs:
+                    if isinstance(m, AIMessage):
+                        if isinstance(m.content, str) and m.content.startswith("__sql__:"):
+                            # Format: __sql__:{step_id}:{label}:{sql}
+                            parts = m.content.split(":", 3)
+                            if len(parts) == 4 and parts[3]:
+                                turn_sql_steps.append({
+                                    "step_id": str(parts[1]),
+                                    "label": parts[2] or "SQL 查询",
+                                    "sql": parts[3],
+                                    "elapsed_ms": None,
+                                    "performance": None,
+                                    "optimization": None,
+                                })
+                                turn_sqls.append(parts[3])
+                        elif getattr(m, "tool_calls", None):
+                            for tc in m.tool_calls:
+                                args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                                q = args.get("query", "") or args.get("sql", "")
+                                if q:
+                                    turn_sql_steps.append({
+                                        "step_id": "",
+                                        "label": "SQL 查询",
+                                        "sql": q,
+                                        "elapsed_ms": None,
+                                        "performance": None,
+                                        "optimization": None,
+                                    })
+                                    turn_sqls.append(q)
 
             # 最后一条有内容且无 tool_calls 的 AIMessage 为最终回答
             last_ai = None
@@ -333,6 +391,7 @@ async def get_history(thread_id: str):
                     "role": "assistant",
                     "content": last_ai,
                     "sqls": turn_sqls,  # list of SQL strings (may be empty for general_chat)
+                    "sql_steps": turn_sql_steps,
                 })
 
         return {"messages": messages}
@@ -344,18 +403,50 @@ async def get_history(thread_id: str):
 @app.get("/api/sessions/{thread_id}/plans")
 async def get_session_plans(thread_id: str):
     """获取属于指定会话的所有任务链路（SessionPlan）。"""
+    from agent.session_plan import SessionPlanManager
+
     plans_dir = _ROOT / "report" / "sessions"
+    manager = SessionPlanManager(str(plans_dir))
+    plans = manager.list_plans_by_thread(thread_id)
+
     result = []
-    if plans_dir.exists():
-        for task_dir in sorted(plans_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-            json_file = task_dir / "plan.json"
-            if json_file.exists():
-                try:
-                    data = json.loads(json_file.read_text(encoding="utf-8"))
-                    if data.get("thread_id", "") == thread_id:
-                        result.append(data)
-                except Exception:
-                    continue
+    for p in plans:
+        result.append({
+            "task_id": p.task_id,
+            "title": p.title,
+            "description": p.description,
+            "skill": p.skill,
+            "thread_id": p.thread_id,
+            "status": p.status,
+            "created_at": p.created_at,
+            "updated_at": p.updated_at,
+            "steps": [
+                {
+                    "step_id": s.step_id,
+                    "description": s.description,
+                    "status": s.status,
+                    "sql": s.sql,
+                    "elapsed_ms": s.elapsed_ms,
+                    "result_summary": s.result_summary,
+                    "error": s.error,
+                    "started_at": s.started_at,
+                    "completed_at": s.completed_at,
+                    "notes": s.notes,
+                }
+                for s in p.steps
+            ],
+            "notes": [
+                {
+                    "note_type": n.note_type,
+                    "title": n.title,
+                    "content": n.content,
+                    "tags": n.tags,
+                    "created_at": n.created_at,
+                }
+                for n in p.notes
+            ],
+        })
+
     return {"plans": result}
 
 
@@ -455,6 +546,7 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
         sql: str,
         performance: dict | None = None,
         optimization: dict | None = None,
+        elapsed_ms: int | None = None,
     ) -> None:
         asyncio.run_coroutine_threadsafe(
             queue.put(json.dumps({
@@ -464,6 +556,7 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
                 "sql": sql,
                 "performance": performance,
                 "optimization": optimization,
+                "elapsed_ms": elapsed_ms,
             })),
             loop,
         )

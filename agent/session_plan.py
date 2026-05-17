@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -51,6 +52,7 @@ class PlanStep:
     description: str
     status: StepStatus = "pending"
     sql: str = ""
+    elapsed_ms: Optional[int] = None
     result_summary: str = ""
     error: str = ""
     started_at: str = ""
@@ -159,7 +161,10 @@ class SessionPlanManager:
         if not json_file.exists():
             return None
         try:
-            return _from_dict(json.loads(json_file.read_text(encoding="utf-8")))
+            plan = _from_dict(json.loads(json_file.read_text(encoding="utf-8")))
+            if self._backfill_elapsed_ms(plan):
+                self._save(plan)
+            return plan
         except Exception as e:
             logger.warning(f"[SessionPlan] Failed to read plan {task_id}: {e}")
             return None
@@ -175,12 +180,11 @@ class SessionPlanManager:
             json_file = plan_dir / "plan.json"
             if not json_file.exists():
                 continue
-            try:
-                data = json.loads(json_file.read_text(encoding="utf-8"))
-                if data.get("thread_id", "") == thread_id:
-                    plans.append(_from_dict(data))
-            except Exception:
+            plan = self.get_plan(plan_dir.name)
+            if plan is None:
                 continue
+            if plan.thread_id == thread_id:
+                plans.append(plan)
         plans.sort(key=lambda p: p.created_at, reverse=True)
         return plans
 
@@ -190,6 +194,7 @@ class SessionPlanManager:
         step_id: int,
         status: StepStatus,
         sql: str = "",
+        elapsed_ms: Optional[int] = None,
         result_summary: str = "",
         error: str = "",
         notes: str = "",
@@ -204,6 +209,8 @@ class SessionPlanManager:
                 step.status = status
                 if sql:
                     step.sql = sql
+                if elapsed_ms is not None:
+                    step.elapsed_ms = max(0, int(elapsed_ms))
                 if result_summary:
                     step.result_summary = result_summary[:300]
                 if error:
@@ -214,6 +221,8 @@ class SessionPlanManager:
                     step.started_at = now
                 if status in ("done", "failed", "skipped"):
                     step.completed_at = now
+                    if step.elapsed_ms is None:
+                        step.elapsed_ms = self._infer_elapsed_ms(step)
                 break
         plan.updated_at = now
         self._save(plan)
@@ -334,6 +343,9 @@ class SessionPlanManager:
         plan_dir = self._base_dir / plan.task_id
         plan_dir.mkdir(parents=True, exist_ok=True)
 
+        # Thread marker for robust cleanup by session deletion flow.
+        (plan_dir / "thread_id.txt").write_text(plan.thread_id or "", encoding="utf-8")
+
         # Machine-readable JSON
         (plan_dir / "plan.json").write_text(
             json.dumps(_to_dict(plan), ensure_ascii=False, indent=2),
@@ -343,6 +355,38 @@ class SessionPlanManager:
         (plan_dir / "plan.md").write_text(
             _to_markdown(plan), encoding="utf-8"
         )
+
+    def _backfill_elapsed_ms(self, plan: SessionPlan) -> bool:
+        """Backfill missing elapsed_ms for compatibility with older plans."""
+        changed = False
+        for step in plan.steps:
+            if step.elapsed_ms is None and step.status in ("done", "failed", "skipped"):
+                inferred = self._infer_elapsed_ms(step)
+                if inferred is not None:
+                    step.elapsed_ms = inferred
+                    changed = True
+        return changed
+
+    @staticmethod
+    def _infer_elapsed_ms(step: PlanStep) -> Optional[int]:
+        """Infer elapsed_ms from notes first, then from timestamps."""
+        if step.notes:
+            m = re.search(r"耗时\s*[:：]\s*(\d+)\s*ms", step.notes, flags=re.IGNORECASE)
+            if m:
+                try:
+                    return max(0, int(m.group(1)))
+                except Exception:
+                    pass
+
+        if step.started_at and step.completed_at:
+            try:
+                started = datetime.strptime(step.started_at, "%Y-%m-%d %H:%M:%S")
+                completed = datetime.strptime(step.completed_at, "%Y-%m-%d %H:%M:%S")
+                delta_ms = int((completed - started).total_seconds() * 1000)
+                return max(0, delta_ms)
+            except Exception:
+                return None
+        return None
 
 
 # ── Pure functions ─────────────────────────────────────────────────────────
@@ -367,6 +411,7 @@ def _to_dict(plan: SessionPlan) -> dict:
                 "description":    s.description,
                 "status":         s.status,
                 "sql":            s.sql,
+                "elapsed_ms":     s.elapsed_ms,
                 "result_summary": s.result_summary,
                 "error":          s.error,
                 "started_at":     s.started_at,
@@ -404,6 +449,7 @@ def _from_dict(data: dict) -> SessionPlan:
                 description=s["description"],
                 status=s.get("status", "pending"),
                 sql=s.get("sql", ""),
+                elapsed_ms=s.get("elapsed_ms"),
                 result_summary=s.get("result_summary", ""),
                 error=s.get("error", ""),
                 started_at=s.get("started_at", ""),
@@ -463,6 +509,8 @@ def _to_markdown(plan: SessionPlan) -> str:
             ]
             if s.sql:
                 lines += ["**SQL**:", "```sql", s.sql, "```", ""]
+            if s.elapsed_ms is not None:
+                lines += [f"**执行时间**: {s.elapsed_ms} ms", ""]
             if s.result_summary:
                 lines += [f"**结果**: {s.result_summary}", ""]
             if s.error:

@@ -20,8 +20,8 @@ _current_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "sql_step_session", default=""
 )
 
-# session_id → hook(step_id, label, sql, performance, optimization)
-_hooks: dict[str, Callable[[str, str, str, dict | None, dict | None], None]] = {}
+# session_id → hook(step_id, label, sql, performance, optimization, elapsed_ms)
+_hooks: dict[str, Callable[[str, str, str, dict | None, dict | None, int | None], None]] = {}
 
 
 def set_session(session_id: str) -> None:
@@ -29,8 +29,8 @@ def set_session(session_id: str) -> None:
     _current_session_id.set(session_id)
 
 
-def register_hook(session_id: str, hook: Callable[[str, str, str, dict | None, dict | None], None]) -> None:
-    """注册 SQL 步骤事件回调 hook(step_id, label, sql, performance, optimization)。"""
+def register_hook(session_id: str, hook: Callable[[str, str, str, dict | None, dict | None, int | None], None]) -> None:
+    """注册 SQL 步骤事件回调 hook(step_id, label, sql, performance, optimization, elapsed_ms)。"""
     _hooks[session_id] = hook
 
 
@@ -45,11 +45,12 @@ def emit(
     sql: str,
     performance: dict | None = None,
     optimization: dict | None = None,
+    elapsed_ms: int | None = None,
 ) -> None:
     """向当前会话的前端发射一个 SQL 步骤执行事件。"""
     sid = _current_session_id.get("")
     if sid and sid in _hooks:
         try:
-            _hooks[sid](step_id, label, sql, performance, optimization)
+            _hooks[sid](step_id, label, sql, performance, optimization, elapsed_ms)
         except Exception as e:
             logger.warning(f"[SqlStepEmitter] hook error: {e}")

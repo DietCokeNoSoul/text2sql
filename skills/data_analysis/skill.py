@@ -17,6 +17,7 @@ import csv
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -661,6 +662,7 @@ class DataAnalysisSkill(BaseSkill):
                     insights.append({"step_id": step_id, "insight": "SQL已被用户跳过"})
                     continue
 
+            started_at = time.perf_counter()
             pipeline_result = run_sql_execution_pipeline(
                 sql=sql,
                 query_tool=query_tool,
@@ -672,6 +674,7 @@ class DataAnalysisSkill(BaseSkill):
                 correction_max_retries=self._correction_max_retries,
                 precomputed_optimization=perf_opt_result,
             )
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             logger.info("[DataAnalysis][Pipeline][step=%s] decision=%s", step_id, pipeline_result.decision)
 
             if pipeline_result.success:
@@ -683,6 +686,7 @@ class DataAnalysisSkill(BaseSkill):
                     "original_query": sql,
                     "result": result,
                     "success": True,
+                    "elapsed_ms": elapsed_ms,
                     "retries": pipeline_result.retries,
                     "correction_trace": pipeline_result.correction_trace,
                     "pipeline_decision": pipeline_result.decision,
@@ -698,6 +702,7 @@ class DataAnalysisSkill(BaseSkill):
                     pipeline_result.final_sql,
                     performance=perf_analysis.to_dict(),
                     optimization=perf_opt_result.to_dict(),
+                    elapsed_ms=elapsed_ms,
                 )
 
                 # ── Session plan: mark sub-step done ──────────────────────
@@ -706,11 +711,14 @@ class DataAnalysisSkill(BaseSkill):
                     self._plan_manager.update_step(
                         task_id, 40 + step_id, "done",
                         sql=pipeline_result.final_sql,
+                        elapsed_ms=elapsed_ms,
                         result_summary=str(result)[:200],
                         notes=(
-                            perf_analysis.summary + (
-                                f" | 优化: {perf_opt_result.original_analysis.score}->{perf_analysis.score}"
-                                if perf_opt_result.optimized else ""
+                            (
+                                f"耗时: {elapsed_ms}ms"
+                                + f" | 评分: {perf_opt_result.original_analysis.score}->{perf_analysis.score}"
+                                + (f" | {perf_analysis.summary}" if perf_analysis else "")
+                                + (" | 已自动优化" if perf_opt_result.optimized else "")
                             )
                         )[:200],
                     )
@@ -771,6 +779,16 @@ class DataAnalysisSkill(BaseSkill):
             if qr.get("success") and qr.get("query"):
                 sql_msgs.append(AIMessage(
                     content=f"__sql__:{qr['step_id']}:{qr['description']}:{qr['query']}"
+                ))
+                sql_msgs.append(AIMessage(
+                    content="__sqlmeta__:" + json.dumps({
+                        "step_id": str(qr["step_id"]),
+                        "label": qr.get("description", "SQL 查询"),
+                        "sql": qr["query"],
+                        "elapsed_ms": qr.get("elapsed_ms"),
+                        "performance": qr.get("performance"),
+                        "optimization": qr.get("performance_optimization"),
+                    }, ensure_ascii=False)
                 ))
         
         return {

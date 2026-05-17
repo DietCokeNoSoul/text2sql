@@ -11,6 +11,8 @@ Plan-Execute pattern:
 """
 
 import logging
+import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -449,6 +451,7 @@ class ComplexQuerySkill(BaseSkill):
                     continue
 
             # ── 统一执行管线：直执失败后自动走纠错 ───────────────────────────
+            started_at = time.perf_counter()
             pipeline_result = run_sql_execution_pipeline(
                 sql=query,
                 query_tool=self.tool_manager.get_query_tool(),
@@ -460,6 +463,7 @@ class ComplexQuerySkill(BaseSkill):
                 correction_max_retries=self._correction_max_retries,
                 precomputed_optimization=perf_opt_result,
             )
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             logger.info("[ComplexQuery][Pipeline][step=%s] decision=%s", step_id, pipeline_result.decision)
 
             if pipeline_result.success:
@@ -471,6 +475,7 @@ class ComplexQuerySkill(BaseSkill):
                     "original_query": step["query"],
                     "result": result,
                     "success": True,
+                    "elapsed_ms": elapsed_ms,
                     "retries": pipeline_result.retries,
                     "correction_trace": pipeline_result.correction_trace,
                     "pipeline_decision": pipeline_result.decision,
@@ -487,6 +492,7 @@ class ComplexQuerySkill(BaseSkill):
                     pipeline_result.final_sql,
                     performance=perf_analysis.to_dict(),
                     optimization=perf_opt_result.to_dict(),
+                    elapsed_ms=elapsed_ms,
                 )
 
                 # ── Session plan: mark step done ──────────────────────────
@@ -495,11 +501,14 @@ class ComplexQuerySkill(BaseSkill):
                     self._plan_manager.update_step(
                         task_id, step_id, "done",
                         sql=pipeline_result.final_sql,
+                        elapsed_ms=elapsed_ms,
                         result_summary=result_preview,
                         notes=(
-                            perf_analysis.summary + (
-                                f" | 优化: {perf_opt_result.original_analysis.score}->{perf_analysis.score}"
-                                if perf_opt_result.optimized else ""
+                            (
+                                f"耗时: {elapsed_ms}ms"
+                                + f" | 评分: {perf_opt_result.original_analysis.score}->{perf_analysis.score}"
+                                + (f" | {perf_analysis.summary}" if perf_analysis else "")
+                                + (" | 已自动优化" if perf_opt_result.optimized else "")
                             )
                         )[:200],
                     )
@@ -538,6 +547,16 @@ class ComplexQuerySkill(BaseSkill):
             if sr.get("success") and sr.get("query"):
                 sql_msgs.append(AIMessage(
                     content=f"__sql__:{sr['step_id']}:{sr['description']}:{sr['query']}"
+                ))
+                sql_msgs.append(AIMessage(
+                    content="__sqlmeta__:" + json.dumps({
+                        "step_id": str(sr["step_id"]),
+                        "label": sr.get("description", "SQL 查询"),
+                        "sql": sr["query"],
+                        "elapsed_ms": sr.get("elapsed_ms"),
+                        "performance": sr.get("performance"),
+                        "optimization": sr.get("performance_optimization"),
+                    }, ensure_ascii=False)
                 ))
         
         return {"step_results": step_results, "messages": sql_msgs}

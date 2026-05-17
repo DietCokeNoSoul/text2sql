@@ -54,7 +54,10 @@
                 :class="step.status"
               >
                 <span class="step-icon">{{ stepIcon(step.status) }}</span>
-                <span class="step-desc">{{ step.description }}</span>
+                <div class="step-content">
+                  <span class="step-desc">{{ step.description }}</span>
+                  <div v-if="step.notes" class="step-note">{{ step.notes }}</div>
+                </div>
               </div>
             </div>
 
@@ -344,7 +347,15 @@ function lastSummary(plan) {
 .plan-step.failed      { color: var(--el-color-danger); }
 
 .step-icon  { width: 14px; text-align: center; flex-shrink: 0; }
+.step-content { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .step-desc  { font-size: 11px; line-height: 1.4; }
+.step-note {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--el-text-color-secondary);
+  opacity: .92;
+  word-break: break-word;
+}
 
 /* ── Result summary ──────────────────────────────────────────────────────── */
 .plan-result {

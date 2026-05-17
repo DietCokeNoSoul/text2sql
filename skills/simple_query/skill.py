@@ -4,7 +4,9 @@
 """
 
 import logging
+import json
 import re
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -355,6 +357,7 @@ class SimpleQuerySkill(BaseSkill):
             # 执行查询
             try:
                 query_tool = self.tool_manager.get_query_tool()
+                started_at = time.perf_counter()
                 pipeline_result = run_sql_execution_pipeline(
                     sql=sql_to_execute,
                     query_tool=query_tool,
@@ -366,6 +369,7 @@ class SimpleQuerySkill(BaseSkill):
                     correction_max_retries=self._correction_max_retries,
                     precomputed_optimization=perf_opt_result,
                 )
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
                 logger.info("[SimpleQuery][Pipeline] decision=%s", pipeline_result.decision)
                 if not pipeline_result.success:
                     raise RuntimeError(pipeline_result.error or "Query failed after correction")
@@ -383,24 +387,38 @@ class SimpleQuerySkill(BaseSkill):
                     sql_to_execute,
                     performance=(perf_analysis.to_dict() if perf_analysis else None),
                     optimization=(perf_opt_result.to_dict() if perf_opt_result else None),
+                    elapsed_ms=elapsed_ms,
                 )
 
                 # ── Session plan: mark step 2 done ────────────────────────
                 task_id = state.get("task_id", "")
                 if self._plan_manager and task_id:
+                    score_text = ""
+                    if perf_opt_result and perf_analysis:
+                        score_text = f"评分: {perf_opt_result.original_analysis.score}->{perf_analysis.score}"
+                    notes_text = f"耗时: {elapsed_ms}ms"
+                    if score_text:
+                        notes_text += f" | {score_text}"
+                    if perf_analysis and perf_analysis.summary:
+                        notes_text += f" | {perf_analysis.summary}"
                     self._plan_manager.update_step(
                         task_id, 2, "done",
                         sql=sql_to_execute,
+                        elapsed_ms=elapsed_ms,
                         result_summary=str(result)[:200],
-                        notes=(
-                            (perf_analysis.summary + (
-                                f" | 优化: {perf_opt_result.original_analysis.score}->{perf_analysis.score}"
-                                if perf_opt_result and perf_opt_result.optimized else ""
-                            ))[:200]
-                            if perf_analysis else ""
-                        ),
+                        notes=notes_text[:200],
                     )
                     self._plan_manager.mark_complete(task_id, success=True)
+
+                # 持久化 SQL 展示元数据，供刷新后历史重建
+                messages.append(AIMessage(content="__sqlmeta__:" + json.dumps({
+                    "step_id": "1",
+                    "label": "SQL 查询",
+                    "sql": sql_to_execute,
+                    "elapsed_ms": elapsed_ms,
+                    "performance": (perf_analysis.to_dict() if perf_analysis else None),
+                    "optimization": (perf_opt_result.to_dict() if perf_opt_result else None),
+                }, ensure_ascii=False)))
                 
                 from langchain_core.messages import ToolMessage
                 tool_message = ToolMessage(
