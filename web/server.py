@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import time
+
 import aiosqlite
 
 # Windows UTF-8 console
@@ -49,6 +51,7 @@ from agent.graph import config as agent_config, initialize_async_graph_for_web, 
 from agent import sql_confirm
 from agent import sql_step_emitter
 from langchain_core.messages import HumanMessage, AIMessage
+from web.stats_db import init_stats_db, insert_query_event, get_overview, get_monthly_stats
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +212,10 @@ async def lifespan(app: FastAPI):
     global _web_graph
     await _init_sessions_db()
     logger.info("Sessions DB ready")
+    try:
+        await init_stats_db()
+    except Exception as e:
+        logger.warning(f"Stats DB init failed (non-fatal): {e}")
     logger.info("Initializing web async graph...")
     _web_graph = await initialize_async_graph_for_web()
     logger.info("Web async graph ready")
@@ -540,6 +547,8 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
     sql_confirm.register_web_hook(session_id, hook)
 
     # 注册 SQL 步骤事件 hook（复杂/数据分析技能每步 SQL 执行后触发）
+    _sql_step_counter = [0]  # 可变容器，供 _run_graph_to_queue 读取
+
     def _sql_step_hook(
         step_id: str,
         label: str,
@@ -548,6 +557,7 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
         optimization: dict | None = None,
         elapsed_ms: int | None = None,
     ) -> None:
+        _sql_step_counter[0] += 1
         asyncio.run_coroutine_threadsafe(
             queue.put(json.dumps({
                 "type": "sql_step",
@@ -597,6 +607,22 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
         answer_content_sent = False  # 是否已向前端发送过 full_response（防重复/防漏）
         # 只对这些节点的 LLM 输出发送给前端
         _ANSWER_NODES = {"format_answer", "general_chat"}
+
+        # ── 统计追踪变量 ──────────────────────────────────────────────────────
+        _stat_start_time = time.time()
+        _stat_prompt_tokens = 0
+        _stat_completion_tokens = 0
+        _stat_total_tokens = 0
+        _stat_skill_type = "unknown"
+        _stat_success = True
+        # 技能节点名称 → skill_type 标签
+        _SKILL_NODE_MAP = {
+            "simple_query_skill":   "simple_query",
+            "complex_query_skill":  "complex_query",
+            "data_analysis_skill":  "data_analysis",
+            "general_chat":         "general_chat",
+        }
+
         try:
             sql_confirm.set_web_session(session_id)
             sql_step_emitter.set_session(session_id)
@@ -612,6 +638,9 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
                         node_has_tokens = False
                         if node in _ANSWER_NODES:
                             answer_content_sent = False  # 重置，准备接收新回答
+                        # 检测技能类型
+                        if node in _SKILL_NODE_MAP:
+                            _stat_skill_type = _SKILL_NODE_MAP[node]
                         label = _NODE_LABELS.get(node, f"▸ {node}")
                         await queue.put(json.dumps({
                             "type": "node_start",
@@ -633,9 +662,16 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
                             }))
 
                 elif kind == "on_chat_model_end":
+                    # 累计 token 用量
+                    output = event.get("data", {}).get("output")
+                    usage = getattr(output, "usage_metadata", None)
+                    if usage and isinstance(usage, dict):
+                        _stat_prompt_tokens     += int(usage.get("input_tokens", 0))
+                        _stat_completion_tokens += int(usage.get("output_tokens", 0))
+                        _stat_total_tokens      += int(usage.get("total_tokens", 0))
+
                     # 回答节点非流式输出时（ainvoke），从 on_chat_model_end 捕获完整内容
                     if current_node in _ANSWER_NODES and not answer_content_sent:
-                        output = event.get("data", {}).get("output")
                         text = _extract_text(output)
                         if text:
                             answer_content_sent = True
@@ -665,9 +701,43 @@ async def chat_stream(query: str, thread_id: str, session_id: str):
             pass
         except Exception as e:
             logger.error(f"Graph error: {e}", exc_info=True)
+            _stat_success = False
             await queue.put(json.dumps({"type": "error", "message": str(e)}))
         finally:
             await queue.put(None)  # 哨兵：通知 SSE 生成器流结束
+
+            # ── 写入统计数据（非阻塞，失败不影响主流程）────────────────────
+            _stat_latency_ms = int((time.time() - _stat_start_time) * 1000)
+            _stat_sql_count = _sql_step_counter[0]
+            # total_tokens 兜底：若模型未返回 usage，用 total 代替
+            if _stat_total_tokens == 0 and (_stat_prompt_tokens + _stat_completion_tokens) > 0:
+                _stat_total_tokens = _stat_prompt_tokens + _stat_completion_tokens
+            # 获取会话名称
+            _session_name = ""
+            try:
+                async with aiosqlite.connect(_SESSIONS_DB) as _db:
+                    async with _db.execute(
+                        "SELECT name FROM sessions WHERE thread_id = ?", (thread_id,)
+                    ) as _cur:
+                        _row = await _cur.fetchone()
+                        if _row:
+                            _session_name = _row[0]
+            except Exception:
+                pass
+            try:
+                await insert_query_event(
+                    thread_id=thread_id,
+                    session_name=_session_name,
+                    skill_type=_stat_skill_type,
+                    prompt_tokens=_stat_prompt_tokens,
+                    completion_tokens=_stat_completion_tokens,
+                    total_tokens=_stat_total_tokens,
+                    sql_count=_stat_sql_count,
+                    success=_stat_success,
+                    latency_ms=_stat_latency_ms,
+                )
+            except Exception as _e:
+                logger.warning(f"Failed to record query stats: {_e}")
 
     task = asyncio.create_task(_run_graph_to_queue())
 
@@ -705,6 +775,31 @@ async def confirm_sql(body: ConfirmRequest):
         event.set()
         return {"ok": True}
     return {"ok": False, "detail": "No pending confirmation for this session"}
+
+
+# ── 统计 API ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/stats/overview")
+async def stats_overview():
+    """返回全局统计总览数据。"""
+    try:
+        data = await get_overview()
+        return data
+    except Exception as e:
+        logger.error(f"stats_overview error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/monthly")
+async def stats_monthly(months: int = 12):
+    """返回最近 N 个月的按月聚合统计数据（折线图用）。"""
+    months = max(1, min(months, 36))
+    try:
+        data = await get_monthly_stats(months)
+        return {"monthly": data}
+    except Exception as e:
+        logger.error(f"stats_monthly error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── 静态文件（生产模式）────────────────────────────────────────────────────────
