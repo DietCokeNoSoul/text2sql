@@ -49,6 +49,7 @@
 39. [阶段三十五：结构化 Prompt 骨架](#39-阶段三十五结构化-prompt-骨架)
 40. [阶段三十六：记忆系统 Bug 修复与策略增强](#40-阶段三十六记忆系统-bug-修复与策略增强)
 41. [阶段三十七：配置集中化与项目清理](#41-阶段三十七配置集中化与项目清理)
+42. [阶段三十八：Agent 系统近期优化（排除前端）](#42-阶段三十八agent-系统近期优化排除前端)
 
 ---
 
@@ -2734,19 +2735,6 @@ if to_evict:
     # 卡片 turn_start/end 使用 evicted.turn_index，而非 cursor
 ```
 
-**③ 稀疏化保留（Anchor T1）**
-
-第一轮对话（T1）通常包含用户意图和业务背景，应始终保留在上下文中：
-
-```python
-@staticmethod
-def _anchor_first_turn(window, complete_turns):
-    anchor = complete_turns[0]
-    if anchor is window[0]:
-        return window
-    return [anchor] + window
-```
-
 **④ 语义去重（Semantic Dedup）**
 
 `format_history_messages` 输出阶段，两两比较窗口内各轮问题的 cosine 相似度，超过阈值（默认 0.85）时跳过较旧那轮的输出。**不修改 window 列表本身**，确保摘要游标不受影响：
@@ -2919,4 +2907,79 @@ while 超限:
 | `.env` | 整合全部配置，新增完整记忆系统配置区块 |
 | `.env.example` | 已删除 |
 
-*最后更新：2026-05-13（新增第38–41章：高级记忆系统 / Prompt 骨架 / 记忆 Bug 修复与策略增强 / 配置集中化与清理）*
+---
+
+## 42. 阶段三十八：Agent 系统近期优化（排除前端）
+
+### 背景
+
+近期重点处理了「执行链路一致性」「模型稳定性」与「刷新后可追溯性」问题。
+本章仅记录 Agent / 后端相关优化，不包含前端表现层改动。
+
+### 42.1 LLM 适配层迁移：ChatTongyi → DashScope 原生 SDK
+
+**改前问题：**
+- 通义封装链路在工具调用与错误语义上可观察性不足
+- 部分模型在当前账号/地域下出现兼容性告警或请求参数异常
+
+**改后方案：**
+- 迁移到 DashScope 原生 SDK 适配层
+- 统一工具调用绑定与响应结构
+- 增加超时与网络错误处理路径
+- 模型侧稳定性基线固定为 `qwen-plus`（当前环境验证可用）
+
+### 42.2 SQL 执行耗时结构化落盘（`elapsed_ms`）
+
+**改前问题：**
+- SQL 耗时主要停留在流式事件或文本备注中，刷新后易丢失
+
+**改后方案：**
+- 在 SQL 真正执行完成后即时计时并写入 plan step：`elapsed_ms`
+- 三个 Skill 路径统一写入：`simple_query`、`complex_query`、`data_analysis`
+- 同时保留 notes 中“耗时: xxms”文本，兼容旧数据回填
+
+### 42.3 SessionPlan 读取链路统一（避免绕过回填）
+
+**改前问题：**
+- 部分接口路径直接读 `plan.json`，未经过管理器回填逻辑
+- 导致旧计划数据在 API 返回中缺失 `elapsed_ms`
+
+**改后方案：**
+- `list_plans_by_thread()` 统一走 `get_plan()`
+- `/api/sessions/{thread_id}/plans` 统一由 `SessionPlanManager` 序列化输出
+- 旧数据在读取时自动回填并持久化，保证接口长期一致
+
+### 42.4 多轮记忆上下文修复（避免历史污染）
+
+**改前问题：**
+- 多轮对话中，部分节点会误用首条用户消息或重复注入早期轮次
+
+**改后方案：**
+- 语义判定与校验优先读取最新 `HumanMessage`
+- 记忆窗口避免重复注入已完成首轮，减少上下文污染
+- 强化多轮追问场景下的当前问题对齐能力
+
+### 42.5 SQL 执行管线统一化与纠错共享
+
+**改前问题：**
+- 三个 Skill 的执行/纠错策略存在分叉，失败路径行为不一致
+
+**改后方案：**
+- 统一执行顺序：约束检查 → 优化/Explain → 用户确认 → 执行 → 失败纠错
+- 通过共享执行管线复用纠错与性能分析能力
+- 增加纠错谱系保护，避免优化后 SQL 在纠错阶段陷入重复重写
+
+### 文件变更（本阶段）
+
+| 文件 | 变更 |
+|------|------|
+| `agent/llm_adapter.py` | DashScope 原生 SDK 适配、错误处理增强 |
+| `agent/session_plan.py` | `elapsed_ms` 字段、回填逻辑、`list_plans_by_thread` 走 `get_plan` |
+| `web/server.py` | plans API 改由 `SessionPlanManager` 输出结构化 step |
+| `skills/simple_query/skill.py` | SQL 执行耗时计时并写入 plan |
+| `skills/complex_query/skill.py` | 多步骤 SQL 耗时写入与统一执行管线接入 |
+| `skills/data_analysis/skill.py` | 分析查询耗时写入与统一执行管线接入 |
+| `agent/sql_execution_pipeline.py` | 执行流程标准化与共享 |
+| `agent/memory.py` | 多轮上下文注入修复与策略增强 |
+
+*最后更新：2026-05-18（新增第42章：Agent 系统近期优化，排除前端）*
